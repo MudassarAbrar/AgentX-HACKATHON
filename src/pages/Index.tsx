@@ -3,7 +3,7 @@ import HeroSection from "@/components/HeroSection";
 import TestimonialLifestyle from "@/components/TestimonialLifestyle";
 import CategoriesSection from "@/components/CategoriesSection";
 import ProductGrid from "@/components/ProductGrid";
-import LooksGallery from "@/components/LooksGallery";
+
 import NewStylesSection from "@/components/NewStylesSection";
 import HappyVoices from "@/components/HappyVoices";
 import InstagramFeed from "@/components/InstagramFeed";
@@ -23,7 +23,7 @@ const Index = () => {
         <TestimonialLifestyle />
         <CategoriesSection />
         <ProductGrid />
-        <LooksGallery />
+        
         <NewStylesSection />
         <HappyVoices />
         <InstagramFeed />
