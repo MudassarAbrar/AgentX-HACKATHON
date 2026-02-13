@@ -6,9 +6,7 @@ import { useCart } from "@/contexts/CartContext";
 const navLinks = [
   { label: "Home", to: "/" },
   { label: "Shop", to: "/shop" },
-  { label: "New Arrival", to: "/shop" },
-  { label: "Contact", to: "#" },
-  { label: "About Us", to: "#" },
+  { label: "Contact", to: "/contact" },
 ];
 
 const Navbar = () => {

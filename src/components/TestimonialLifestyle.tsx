@@ -1,4 +1,4 @@
-import { ArrowUpRight } from "lucide-react";
+
 
 const TestimonialLifestyle = () => {
   return (
@@ -17,10 +17,6 @@ const TestimonialLifestyle = () => {
 
         {/* Right - Lifestyle Section */}
         <div className="flex flex-col justify-center">
-          <div className="flex items-center gap-4 mb-6">
-            <span className="font-display text-sm font-medium text-muted-foreground tracking-widest uppercase">01 — Lifestyle</span>
-            <ArrowUpRight className="w-5 h-5 text-muted-foreground" />
-          </div>
           <h2 className="font-display font-bold text-foreground leading-tight"
             style={{ fontSize: "clamp(2rem, 4vw, 3.2rem)" }}>
             Set Up Your Fashion With The Latest Trends
