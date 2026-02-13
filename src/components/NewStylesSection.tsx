@@ -10,7 +10,7 @@ const items = [
 
 const NewStylesSection = () => {
   return (
-    <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
+    <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
       <div className="grid lg:grid-cols-2 gap-8 scroll-reveal">
         {/* Left - Bold card */}
         <div className="rounded-3xl lg:rounded-4xl bg-foreground text-primary-foreground p-10 lg:p-16 flex flex-col justify-end min-h-[400px]">

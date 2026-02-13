@@ -9,7 +9,7 @@ const images = [hero1, hero2, hero3, hero4, hero5, gallery3];
 
 const InstagramFeed = () => {
   return (
-    <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
+    <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
       <div className="text-center mb-12 scroll-reveal">
         <p className="font-body text-sm text-muted-foreground uppercase tracking-widest mb-2">Follow us on Instagram</p>
         <h2 className="font-display font-bold text-foreground text-3xl lg:text-4xl">@TrendZone</h2>

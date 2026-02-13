@@ -4,10 +4,7 @@ const LoadingScreen = () => {
   const [phase, setPhase] = useState<"reveal" | "move" | "done">("reveal");
 
   useEffect(() => {
-    // Phase 1: text color animates grey → black (already via CSS)
-    // Phase 2: move to top-left
     const t1 = setTimeout(() => setPhase("move"), 1400);
-    // Phase 3: hide overlay
     const t2 = setTimeout(() => setPhase("done"), 2600);
     return () => {
       clearTimeout(t1);
@@ -22,7 +19,7 @@ const LoadingScreen = () => {
       className="fixed inset-0 z-[100] bg-background flex items-center justify-center"
       style={{
         opacity: phase === "move" ? 0 : 1,
-        transition: "opacity 0.6s ease 0.4s",
+        transition: "opacity 0.8s ease 0.6s",
         pointerEvents: phase === "move" ? "none" : "auto",
       }}
     >
@@ -30,11 +27,11 @@ const LoadingScreen = () => {
         className="font-display font-bold"
         style={{
           fontSize: phase === "move" ? "1.5rem" : "clamp(2.5rem, 5vw, 4rem)",
-          color: phase === "reveal" ? "hsl(var(--foreground))" : "hsl(var(--foreground))",
-          transition: "all 1s cubic-bezier(0.16, 1, 0.3, 1)",
+          transition: "all 1.2s cubic-bezier(0.16, 1, 0.3, 1)",
           transform: phase === "move"
             ? "translate(calc(-50vw + 120px), calc(-50vh + 52px)) scale(0.6)"
             : "translate(0, 0) scale(1)",
+          color: "hsl(var(--foreground))",
           backgroundImage: phase === "reveal"
             ? "linear-gradient(90deg, hsl(var(--foreground)) 50%, hsl(var(--muted-foreground)) 50%)"
             : "none",
