@@ -1,39 +1,39 @@
+import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import product1 from "@/assets/product-1.jpg";
+import product2 from "@/assets/product-2.jpg";
 import product3 from "@/assets/product-3.jpg";
-import product6 from "@/assets/product-6.jpg";
+import product4 from "@/assets/product-4.jpg";
 
-const items = [
-  { name: "Jacket", image: product1 },
-  { name: "Back Pleat", image: product6 },
-  { name: "Tote Bag", image: product3 },
+const recommended = [
+  { id: 1, name: "Linen Blazer", price: "$189", image: product1 },
+  { id: 2, name: "Classic Sneakers", price: "$129", image: product2 },
+  { id: 3, name: "Canvas Tote", price: "$79", image: product3 },
+  { id: 4, name: "Wool Overcoat", price: "$349", image: product4 },
 ];
 
 const NewStylesSection = () => {
   return (
     <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
-      <div className="grid lg:grid-cols-2 gap-8 scroll-reveal">
-        {/* Left - Bold card */}
-        <div className="rounded-3xl lg:rounded-4xl bg-foreground text-primary-foreground p-10 lg:p-16 flex flex-col justify-end min-h-[400px]">
-          <p className="font-body text-sm text-primary-foreground/50 mb-4 uppercase tracking-widest">New Collection</p>
-          <h2 className="font-display font-bold leading-tight" style={{ fontSize: "clamp(2rem, 4vw, 3rem)" }}>
-            New Styles For A Modern Look
-          </h2>
-          <button className="mt-8 self-start bg-primary-foreground text-foreground font-display font-semibold rounded-full px-8 py-3.5 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-300">
-            Shop Now
-          </button>
-        </div>
+      <div className="flex items-center justify-between mb-12 scroll-reveal">
+        <h2 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
+          Recommended For You
+        </h2>
+        <Link to="/shop" className="font-display text-sm font-medium text-foreground flex items-center gap-2 hover:text-accent transition-colors">
+          VIEW ALL <ArrowRight className="w-4 h-4" />
+        </Link>
+      </div>
 
-        {/* Right - Small cards */}
-        <div className="grid grid-cols-3 gap-4">
-          {items.map((item) => (
-            <div key={item.name} className="group cursor-pointer">
-              <div className="rounded-2xl overflow-hidden bg-secondary aspect-[3/4] mb-3">
-                <img src={item.image} alt={item.name} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
-              </div>
-              <p className="font-display text-sm font-medium text-foreground text-center">{item.name}</p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 scroll-reveal">
+        {recommended.map((item) => (
+          <Link to={`/product/${item.id}`} key={item.id} className="group cursor-pointer">
+            <div className="rounded-2xl lg:rounded-3xl overflow-hidden bg-secondary aspect-[3/4] mb-4">
+              <img src={item.image} alt={item.name} className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105" />
             </div>
-          ))}
-        </div>
+            <h3 className="font-display font-medium text-foreground text-base">{item.name}</h3>
+            <p className="font-display font-semibold text-foreground mt-1">{item.price}</p>
+          </Link>
+        ))}
       </div>
     </section>
   );
