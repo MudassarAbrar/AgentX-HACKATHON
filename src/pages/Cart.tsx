@@ -1,11 +1,31 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Minus, Plus, Trash2, ShoppingBag, ArrowRight } from "lucide-react";
+import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Tag, X } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useCart } from "@/contexts/CartContext";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 const Cart = () => {
-  const { items, removeItem, updateQuantity, total, count } = useCart();
+  const { items, removeItem, updateQuantity, total, count, couponCode, discount, applyCoupon, removeCoupon } = useCart();
+  const [couponInput, setCouponInput] = useState("");
+  const [applyingCoupon, setApplyingCoupon] = useState(false);
+  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim()) return;
+    setApplyingCoupon(true);
+    const result = await applyCoupon(couponInput.trim());
+    if (result.success) {
+      toast.success("Coupon applied successfully!");
+      setCouponInput("");
+    } else {
+      toast.error(result.error || "Invalid coupon code");
+    }
+    setApplyingCoupon(false);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -65,10 +85,51 @@ const Cart = () => {
             <div className="lg:col-span-1">
               <div className="rounded-2xl border border-border bg-card p-6 sticky top-28">
                 <h3 className="font-display font-bold text-foreground text-lg mb-6">Order Summary</h3>
+                
+                {/* Coupon Input */}
+                {!couponCode ? (
+                  <div className="mb-6">
+                    <div className="flex gap-2">
+                      <Input
+                        value={couponInput}
+                        onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                        placeholder="Coupon code"
+                        className="flex-1"
+                        onKeyPress={(e) => e.key === "Enter" && handleApplyCoupon()}
+                      />
+                      <Button
+                        onClick={handleApplyCoupon}
+                        disabled={!couponInput.trim() || applyingCoupon}
+                        size="icon"
+                      >
+                        <Tag className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mb-6 p-3 bg-accent/10 rounded-lg flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Tag className="w-4 h-4 text-accent" />
+                      <span className="font-display font-medium text-sm">{couponCode}</span>
+                    </div>
+                    <button
+                      onClick={removeCoupon}
+                      className="p-1 hover:bg-accent/20 rounded transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 <div className="space-y-3 font-body text-sm">
                   <div className="flex justify-between text-muted-foreground">
-                    <span>Subtotal</span><span>${total.toFixed(2)}</span>
+                    <span>Subtotal</span><span>${subtotal.toFixed(2)}</span>
                   </div>
+                  {discount > 0 && (
+                    <div className="flex justify-between text-accent">
+                      <span>Discount</span><span>-${discount.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-muted-foreground">
                     <span>Shipping</span><span>Free</span>
                   </div>

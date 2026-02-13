@@ -1,21 +1,44 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Lock, Check } from "lucide-react";
+import { ArrowLeft, Lock, Check, Tag } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useCart } from "@/contexts/CartContext";
+import { createOrder } from "@/lib/api/orders";
 import { toast } from "sonner";
 
 const Checkout = () => {
-  const { items, total, clearCart } = useCart();
+  const { items, total, clearCart, discount, couponCode } = useCart();
   const navigate = useNavigate();
   const [submitted, setSubmitted] = useState(false);
+  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
-    clearCart();
-    toast.success("Order placed successfully!");
+    const formData = new FormData(e.target as HTMLFormElement);
+    
+    const shippingInfo = {
+      email: formData.get("email") as string,
+      firstName: formData.get("firstName") as string,
+      lastName: formData.get("lastName") as string,
+      address: formData.get("address") as string,
+      city: formData.get("city") as string,
+      state: formData.get("state") as string,
+      zip: formData.get("zip") as string,
+    };
+
+    try {
+      const order = await createOrder(shippingInfo, couponCode);
+      if (order) {
+        setSubmitted(true);
+        await clearCart();
+        toast.success("Order placed successfully!");
+      } else {
+        toast.error("Failed to create order. Please try again.");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Failed to create order. Please try again.");
+    }
   };
 
   if (items.length === 0 && !submitted) {
@@ -68,37 +91,37 @@ const Checkout = () => {
 
             <div>
               <label className="font-display text-sm font-medium text-foreground block mb-2">Email</label>
-              <input required type="email" placeholder="you@example.com" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+              <input required name="email" type="email" placeholder="you@example.com" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
             </div>
 
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
                 <label className="font-display text-sm font-medium text-foreground block mb-2">First name</label>
-                <input required placeholder="John" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+                <input required name="firstName" placeholder="John" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
               </div>
               <div>
                 <label className="font-display text-sm font-medium text-foreground block mb-2">Last name</label>
-                <input required placeholder="Doe" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+                <input required name="lastName" placeholder="Doe" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
               </div>
             </div>
 
             <div>
               <label className="font-display text-sm font-medium text-foreground block mb-2">Address</label>
-              <input required placeholder="123 Main St" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+              <input required name="address" placeholder="123 Main St" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
             </div>
 
             <div className="grid sm:grid-cols-3 gap-4">
               <div>
                 <label className="font-display text-sm font-medium text-foreground block mb-2">City</label>
-                <input required placeholder="New York" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+                <input required name="city" placeholder="New York" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
               </div>
               <div>
                 <label className="font-display text-sm font-medium text-foreground block mb-2">State</label>
-                <input required placeholder="NY" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+                <input required name="state" placeholder="NY" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
               </div>
               <div>
                 <label className="font-display text-sm font-medium text-foreground block mb-2">ZIP</label>
-                <input required placeholder="10001" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
+                <input required name="zip" placeholder="10001" className="w-full bg-background border border-border rounded-xl px-4 py-3 font-body text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground transition-colors" />
               </div>
             </div>
 
@@ -146,8 +169,19 @@ const Checkout = () => {
                   </div>
                 ))}
               </div>
+              {couponCode && (
+                <div className="mb-4 p-3 bg-accent/10 rounded-lg flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-accent" />
+                  <span className="font-display font-medium text-sm">{couponCode}</span>
+                </div>
+              )}
               <div className="border-t border-border pt-4 space-y-2 font-body text-sm">
-                <div className="flex justify-between text-muted-foreground"><span>Subtotal</span><span>${total.toFixed(2)}</span></div>
+                <div className="flex justify-between text-muted-foreground"><span>Subtotal</span><span>${subtotal.toFixed(2)}</span></div>
+                {discount > 0 && (
+                  <div className="flex justify-between text-accent">
+                    <span>Discount</span><span>-${discount.toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-muted-foreground"><span>Shipping</span><span>Free</span></div>
                 <div className="border-t border-border pt-3 flex justify-between font-display font-bold text-foreground text-base">
                   <span>Total</span><span>${total.toFixed(2)}</span>

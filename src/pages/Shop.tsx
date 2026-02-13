@@ -1,21 +1,89 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { SlidersHorizontal, X } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { products } from "@/lib/products";
+import { useFilter } from "@/contexts/FilterContext";
+import { getProducts, type Product } from "@/lib/api/products";
 
 const categories = ["All", "Clothes", "Shoes", "Bags", "Accessories"];
 
 const Shop = () => {
+  const { filters, setCategory, setSort } = useFilter();
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState("All");
-  const [sortBy, setSortBy] = useState("default");
 
-  let filtered = activeCategory === "All" ? products : products.filter((p) => p.category === activeCategory);
+  // Sync local category state with filter context
+  useEffect(() => {
+    if (filters.category) {
+      setActiveCategory(filters.category);
+    } else {
+      setActiveCategory("All");
+    }
+  }, [filters.category]);
 
-  if (sortBy === "low") filtered = [...filtered].sort((a, b) => a.price - b.price);
-  if (sortBy === "high") filtered = [...filtered].sort((a, b) => b.price - a.price);
-  if (sortBy === "name") filtered = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+  // Fetch products based on filters
+  useEffect(() => {
+    const fetchProducts = async () => {
+      setLoading(true);
+      try {
+        const productFilters: any = {};
+        if (filters.category && filters.category !== "All") {
+          productFilters.category = filters.category;
+        }
+        if (filters.minPrice !== null) {
+          productFilters.minPrice = filters.minPrice;
+        }
+        if (filters.maxPrice !== null) {
+          productFilters.maxPrice = filters.maxPrice;
+        }
+
+        const sortField =
+          filters.sortBy === "default" ? "created_at" : filters.sortBy;
+        const productsData = await getProducts(productFilters, {
+          field: sortField as any,
+          order: filters.sortOrder,
+        });
+
+        setProducts(productsData);
+      } catch (error) {
+        console.error("Error fetching products:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProducts();
+  }, [filters]);
+
+  const handleCategoryChange = (cat: string) => {
+    setActiveCategory(cat);
+    if (cat === "All") {
+      setCategory(null);
+    } else {
+      setCategory(cat);
+    }
+  };
+
+  const handleSortChange = (value: string) => {
+    if (value === "low") {
+      setSort("price", "asc");
+    } else if (value === "high") {
+      setSort("price", "desc");
+    } else if (value === "name") {
+      setSort("name", "asc");
+    } else {
+      setSort("created_at", "desc");
+    }
+  };
+
+  const getSortValue = () => {
+    if (filters.sortBy === "price" && filters.sortOrder === "asc") return "low";
+    if (filters.sortBy === "price" && filters.sortOrder === "desc") return "high";
+    if (filters.sortBy === "name") return "name";
+    return "default";
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -35,7 +103,7 @@ const Shop = () => {
           {categories.map((cat) => (
             <button
               key={cat}
-              onClick={() => setActiveCategory(cat)}
+              onClick={() => handleCategoryChange(cat)}
               className={`font-display text-sm px-5 py-2 rounded-full border transition-colors ${
                 activeCategory === cat
                   ? "bg-foreground text-primary-foreground border-foreground"
@@ -46,8 +114,8 @@ const Shop = () => {
             </button>
           ))}
           <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
+            value={getSortValue()}
+            onChange={(e) => handleSortChange(e.target.value)}
             className="ml-auto font-body text-sm bg-background border border-border rounded-full px-4 py-2 text-foreground focus:outline-none"
           >
             <option value="default">Sort by</option>
@@ -58,22 +126,32 @@ const Shop = () => {
         </div>
 
         {/* Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 lg:gap-8">
-          {filtered.map((product) => (
-            <Link to={`/product/${product.id}`} key={product.id} className="group cursor-pointer">
-              <div className="rounded-2xl lg:rounded-3xl overflow-hidden bg-secondary aspect-[3/4] mb-4">
-                <img
-                  src={product.image}
-                  alt={product.name}
-                  className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
-                  loading="lazy"
-                />
-              </div>
-              <h3 className="font-display font-medium text-foreground text-sm sm:text-base">{product.name}</h3>
-              <p className="font-display font-semibold text-foreground mt-1">${product.price}</p>
-            </Link>
-          ))}
-        </div>
+        {loading ? (
+          <div className="text-center py-20">
+            <p className="font-body text-muted-foreground">Loading products...</p>
+          </div>
+        ) : products.length === 0 ? (
+          <div className="text-center py-20">
+            <p className="font-body text-muted-foreground">No products found.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 lg:gap-8">
+            {products.map((product) => (
+              <Link to={`/product/${product.id}`} key={product.id} className="group cursor-pointer">
+                <div className="rounded-2xl lg:rounded-3xl overflow-hidden bg-secondary aspect-[3/4] mb-4">
+                  <img
+                    src={product.image_url}
+                    alt={product.name}
+                    className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                    loading="lazy"
+                  />
+                </div>
+                <h3 className="font-display font-medium text-foreground text-sm sm:text-base">{product.name}</h3>
+                <p className="font-display font-semibold text-foreground mt-1">${product.price}</p>
+              </Link>
+            ))}
+          </div>
+        )}
       </main>
       <Footer />
     </div>
