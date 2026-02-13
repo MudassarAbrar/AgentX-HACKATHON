@@ -29,20 +29,21 @@ const CategoriesSection = () => {
       </div>
 
       {/* Category list — full width with floating overlay image */}
-      <div className="relative">
-        {/* Floating tilted preview — only on hover, positioned above hovered row */}
-        <div className="hidden lg:block absolute right-12 z-10 pointer-events-none">
+      <div className="relative overflow-hidden">
+        {/* Floating tilted preview — only on hover, contained within parent */}
+        <div className="hidden lg:block absolute inset-0 z-10 pointer-events-none">
           {categories.map((cat, i) => (
             <div
               key={cat.name}
-              className="absolute w-[240px] h-[320px] rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
+              className="absolute w-[200px] h-[260px] rounded-2xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
               style={{
                 opacity: hoveredIdx === i ? 1 : 0,
                 transform: hoveredIdx === i
                   ? `rotate(-6deg) scale(1)`
                   : `rotate(-6deg) scale(0.9)`,
-                right: 0,
-                top: `${i * 80 - 280}px`,
+                right: "40px",
+                top: "50%",
+                marginTop: "-130px",
               }}
             >
               <img src={cat.image} alt={cat.name} className="w-full h-full object-cover" />
