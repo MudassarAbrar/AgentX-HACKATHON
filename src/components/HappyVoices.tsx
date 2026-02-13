@@ -15,7 +15,7 @@ const HappyVoices = () => {
 
   return (
     <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
-      <div className="flex items-center justify-between mb-12">
+      <div className="flex items-center justify-between mb-12 scroll-reveal">
         <h2 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
           Happy Voices
         </h2>
@@ -29,7 +29,7 @@ const HappyVoices = () => {
         </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-6">
+      <div className="grid md:grid-cols-3 gap-6 scroll-reveal">
         {reviews.map((review, i) => (
           <div key={review.name} className={`rounded-3xl border border-border p-8 transition-all duration-500 ${i === idx ? "bg-foreground text-primary-foreground border-foreground" : "bg-background"}`}>
             <div className="flex gap-1 mb-4">

@@ -8,10 +8,15 @@ import NewStylesSection from "@/components/NewStylesSection";
 import HappyVoices from "@/components/HappyVoices";
 import InstagramFeed from "@/components/InstagramFeed";
 import Footer from "@/components/Footer";
+import LoadingScreen from "@/components/LoadingScreen";
+import { useScrollReveal } from "@/hooks/useScrollReveal";
 
 const Index = () => {
+  useScrollReveal();
+
   return (
     <div className="min-h-screen bg-background">
+      <LoadingScreen />
       <Navbar />
       <main>
         <HeroSection />
