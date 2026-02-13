@@ -3,9 +3,8 @@ import HeroSection from "@/components/HeroSection";
 import TestimonialLifestyle from "@/components/TestimonialLifestyle";
 import CategoriesSection from "@/components/CategoriesSection";
 import ProductGrid from "@/components/ProductGrid";
-
 import NewStylesSection from "@/components/NewStylesSection";
-import HappyVoices from "@/components/HappyVoices";
+import { StaggerTestimonials } from "@/components/ui/stagger-testimonials";
 import InstagramFeed from "@/components/InstagramFeed";
 import Footer from "@/components/Footer";
 import LoadingScreen from "@/components/LoadingScreen";
@@ -23,9 +22,16 @@ const Index = () => {
         <TestimonialLifestyle />
         <CategoriesSection />
         <ProductGrid />
-        
         <NewStylesSection />
-        <HappyVoices />
+
+        {/* Testimonials */}
+        <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
+          <h2 className="font-display font-bold text-foreground text-center mb-10" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
+            Happy Voices
+          </h2>
+          <StaggerTestimonials />
+        </section>
+
         <InstagramFeed />
       </main>
       <Footer />
