@@ -123,3 +123,18 @@
   opacity: 1;
   transform: translateY(0);
 }
+
+/* Loading text color reveal */
+@keyframes text-color-reveal {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+
+/* Smooth scroll for whole page */
+html {
+  scroll-behavior: smooth;
+}
