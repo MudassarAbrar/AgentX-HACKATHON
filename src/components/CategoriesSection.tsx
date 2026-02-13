@@ -28,43 +28,21 @@ const CategoriesSection = () => {
         </h2>
       </div>
 
+      {/* Category list — full width, image floats above */}
       <div className="relative">
-        {/* Category list */}
-        <div className="lg:pr-[380px]">
+        {/* Floating tilted preview image — overlays above the list */}
+        <div className="hidden lg:block absolute -top-16 right-12 z-10 pointer-events-none">
           {categories.map((cat, i) => (
             <div
               key={cat.name}
-              className="group flex items-center justify-between py-6 lg:py-8 border-b border-border cursor-pointer scroll-reveal"
-              onMouseEnter={() => setHoveredIdx(i)}
-            >
-              <div className="flex items-center gap-6">
-                <span className="font-display text-muted-foreground text-sm w-8">0{i + 1}</span>
-                <h3
-                  className="font-display font-semibold text-foreground transition-colors group-hover:text-accent"
-                  style={{ fontSize: "clamp(1.5rem, 3vw, 2.5rem)" }}
-                >
-                  {cat.name}
-                </h3>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="font-body text-sm text-muted-foreground hidden sm:block">{cat.count}</span>
-                <ArrowRight className="w-5 h-5 text-foreground transition-transform duration-300 group-hover:translate-x-2" />
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Floating tilted preview image */}
-        <div className="hidden lg:flex absolute right-0 top-0 bottom-0 w-[340px] items-center justify-center pointer-events-none">
-          {categories.map((cat, i) => (
-            <div
-              key={cat.name}
-              className="absolute w-[300px] h-[400px] rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
+              className="absolute w-[260px] h-[340px] rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
               style={{
                 opacity: hoveredIdx === i ? 1 : 0,
                 transform: hoveredIdx === i
                   ? "rotate(-6deg) translateY(0) scale(1)"
                   : "rotate(-6deg) translateY(20px) scale(0.95)",
+                right: 0,
+                top: 0,
               }}
             >
               <img
@@ -75,6 +53,29 @@ const CategoriesSection = () => {
             </div>
           ))}
         </div>
+
+        {/* Category rows — full width */}
+        {categories.map((cat, i) => (
+          <div
+            key={cat.name}
+            className="group flex items-center justify-between py-6 lg:py-8 border-b border-border cursor-pointer scroll-reveal"
+            onMouseEnter={() => setHoveredIdx(i)}
+          >
+            <div className="flex items-center gap-6">
+              <span className="font-display text-muted-foreground text-sm w-8">0{i + 1}</span>
+              <h3
+                className="font-display font-semibold text-foreground transition-colors group-hover:text-accent"
+                style={{ fontSize: "clamp(1.5rem, 3vw, 2.5rem)" }}
+              >
+                {cat.name}
+              </h3>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="font-body text-sm text-muted-foreground hidden sm:block">{cat.count}</span>
+              <ArrowRight className="w-5 h-5 text-foreground transition-transform duration-300 group-hover:translate-x-2" />
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );

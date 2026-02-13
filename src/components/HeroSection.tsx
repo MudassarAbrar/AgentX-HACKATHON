@@ -7,32 +7,34 @@ import { ArrowRight } from "lucide-react";
 
 const HeroSection = () => {
   return (
-    <section className="relative min-h-screen pt-28 pb-16 px-6 lg:px-12 max-w-[1440px] mx-auto overflow-hidden">
+    <section className="relative pt-28 pb-16 px-6 lg:px-12 max-w-[1440px] mx-auto overflow-hidden">
       {/* Headline */}
-      <div className="text-center mb-12 lg:mb-16 scroll-reveal">
-        <h1 className="font-display font-extrabold text-foreground leading-[1.05] tracking-tight"
-          style={{ fontSize: "clamp(2.8rem, 7vw, 6rem)" }}>
+      <div className="text-center mb-10 lg:mb-14 scroll-reveal">
+        <h1
+          className="font-display font-extrabold text-foreground leading-[1.05] tracking-tight"
+          style={{ fontSize: "clamp(2.4rem, 6vw, 5.5rem)" }}
+        >
           Elevate Your Style
           <br />
           With <span className="italic font-accent font-normal">Bold</span> Fashion
         </h1>
       </div>
 
-      {/* Bento Grid — clean 4-column layout */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-5">
-        {/* Card 1 - Tall left */}
-        <div className="col-span-1 row-span-2 rounded-3xl lg:rounded-4xl overflow-hidden aspect-[3/5] group scroll-reveal">
-          <img src={hero1} alt="Fashion editorial in orange" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+      {/* Bento Grid */}
+      <div className="grid grid-cols-4 md:grid-cols-12 auto-rows-[140px] md:auto-rows-[120px] lg:auto-rows-[140px] gap-3 lg:gap-4 scroll-reveal">
+        {/* Image 1 — tall left */}
+        <div className="col-span-2 md:col-span-3 row-span-3 rounded-2xl lg:rounded-3xl overflow-hidden group">
+          <img src={hero1} alt="Fashion editorial" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
         </div>
 
-        {/* Card 2 - Tall */}
-        <div className="col-span-1 row-span-2 rounded-3xl lg:rounded-4xl overflow-hidden aspect-[3/5] group scroll-reveal" style={{ animationDelay: "0.1s" }}>
-          <img src={hero2} alt="Fashion editorial in green" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+        {/* Image 2 — tall second */}
+        <div className="col-span-2 md:col-span-3 row-span-3 rounded-2xl lg:rounded-3xl overflow-hidden group" style={{ animationDelay: "0.1s" }}>
+          <img src={hero2} alt="Fashion editorial" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
         </div>
 
-        {/* Card 3 - Top right with CTA overlay */}
-        <div className="col-span-1 rounded-3xl lg:rounded-4xl overflow-hidden relative group scroll-reveal" style={{ animationDelay: "0.2s" }}>
-          <img src={hero3} alt="Fashion editorial in yellow" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+        {/* Image 3 — top right with CTA */}
+        <div className="col-span-2 md:col-span-3 row-span-2 rounded-2xl lg:rounded-3xl overflow-hidden relative group" style={{ animationDelay: "0.2s" }}>
+          <img src={hero3} alt="Fashion editorial" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
           <div className="absolute inset-0 bg-foreground/20 flex items-end p-4">
             <button className="bg-foreground text-primary-foreground font-display font-semibold rounded-full px-5 py-2.5 text-sm hover:-translate-y-0.5 hover:shadow-xl transition-all duration-300 flex items-center gap-2 whitespace-nowrap w-full justify-center">
               Explore Collections <ArrowRight className="w-3.5 h-3.5" />
@@ -40,14 +42,14 @@ const HeroSection = () => {
           </div>
         </div>
 
-        {/* Card 4 - Top far right */}
-        <div className="col-span-1 rounded-3xl lg:rounded-4xl overflow-hidden group scroll-reveal" style={{ animationDelay: "0.3s" }}>
-          <img src={hero4} alt="Fashion editorial in sky blue" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+        {/* Image 4 — top far right */}
+        <div className="col-span-2 md:col-span-3 row-span-2 rounded-2xl lg:rounded-3xl overflow-hidden group" style={{ animationDelay: "0.3s" }}>
+          <img src={hero4} alt="Fashion editorial" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
         </div>
 
-        {/* Card 5 - Bottom right spanning 2 cols */}
-        <div className="col-span-2 rounded-3xl lg:rounded-4xl overflow-hidden aspect-[2/1] group scroll-reveal" style={{ animationDelay: "0.15s" }}>
-          <img src={hero5} alt="Fashion editorial in mint" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+        {/* Image 5 — bottom right spanning 2 sections */}
+        <div className="col-span-4 md:col-span-6 row-span-1 md:row-span-1 rounded-2xl lg:rounded-3xl overflow-hidden group" style={{ animationDelay: "0.15s" }}>
+          <img src={hero5} alt="Fashion editorial" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
         </div>
       </div>
 
