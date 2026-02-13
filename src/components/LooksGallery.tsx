@@ -5,7 +5,7 @@ import gallery3 from "@/assets/gallery-3.jpg";
 
 const LooksGallery = () => {
   return (
-    <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
+    <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
       <div className="flex items-center justify-between mb-12 scroll-reveal">
         <h2 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
           Latest Looks

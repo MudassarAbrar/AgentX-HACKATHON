@@ -13,12 +13,12 @@ const categories = [
 ];
 
 const CategoriesSection = () => {
-  const [hoveredIdx, setHoveredIdx] = useState(0);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   return (
-    <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
+    <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
       {/* Section heading */}
-      <div className="mb-10 scroll-reveal">
+      <div className="mb-8 scroll-reveal">
         <p className="font-body text-sm text-muted-foreground uppercase tracking-widest mb-2">Browse by</p>
         <h2
           className="font-display font-bold text-foreground"
@@ -28,44 +28,41 @@ const CategoriesSection = () => {
         </h2>
       </div>
 
-      {/* Category list — full width, image floats above */}
+      {/* Category list — full width with floating overlay image */}
       <div className="relative">
-        {/* Floating tilted preview image — overlays above the list */}
-        <div className="hidden lg:block absolute -top-16 right-12 z-10 pointer-events-none">
+        {/* Floating tilted preview — only on hover, positioned above hovered row */}
+        <div className="hidden lg:block absolute right-12 z-10 pointer-events-none">
           {categories.map((cat, i) => (
             <div
               key={cat.name}
-              className="absolute w-[260px] h-[340px] rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
+              className="absolute w-[240px] h-[320px] rounded-3xl overflow-hidden shadow-2xl transition-all duration-500 ease-out"
               style={{
                 opacity: hoveredIdx === i ? 1 : 0,
                 transform: hoveredIdx === i
-                  ? "rotate(-6deg) translateY(0) scale(1)"
-                  : "rotate(-6deg) translateY(20px) scale(0.95)",
+                  ? `rotate(-6deg) scale(1)`
+                  : `rotate(-6deg) scale(0.9)`,
                 right: 0,
-                top: 0,
+                top: `${i * 80 - 280}px`,
               }}
             >
-              <img
-                src={cat.image}
-                alt={cat.name}
-                className="w-full h-full object-cover"
-              />
+              <img src={cat.image} alt={cat.name} className="w-full h-full object-cover" />
             </div>
           ))}
         </div>
 
-        {/* Category rows — full width */}
+        {/* Category rows */}
         {categories.map((cat, i) => (
           <div
             key={cat.name}
-            className="group flex items-center justify-between py-6 lg:py-8 border-b border-border cursor-pointer scroll-reveal"
+            className="group flex items-center justify-between py-5 lg:py-7 border-b border-border cursor-pointer scroll-reveal"
             onMouseEnter={() => setHoveredIdx(i)}
+            onMouseLeave={() => setHoveredIdx(null)}
           >
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 sm:gap-6">
               <span className="font-display text-muted-foreground text-sm w-8">0{i + 1}</span>
               <h3
                 className="font-display font-semibold text-foreground transition-colors group-hover:text-accent"
-                style={{ fontSize: "clamp(1.5rem, 3vw, 2.5rem)" }}
+                style={{ fontSize: "clamp(1.3rem, 3vw, 2.5rem)" }}
               >
                 {cat.name}
               </h3>

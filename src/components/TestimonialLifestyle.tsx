@@ -2,7 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 
 const TestimonialLifestyle = () => {
   return (
-    <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
+    <section className="py-10 lg:py-14 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
       <div className="grid md:grid-cols-2 gap-12 lg:gap-20 scroll-reveal">
         {/* Left - Testimonial */}
         <div className="flex flex-col justify-center">
