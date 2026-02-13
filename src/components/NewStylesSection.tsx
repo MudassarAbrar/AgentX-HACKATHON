@@ -11,7 +11,7 @@ const items = [
 const NewStylesSection = () => {
   return (
     <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
-      <div className="grid lg:grid-cols-2 gap-8">
+      <div className="grid lg:grid-cols-2 gap-8 scroll-reveal">
         {/* Left - Bold card */}
         <div className="rounded-3xl lg:rounded-4xl bg-foreground text-primary-foreground p-10 lg:p-16 flex flex-col justify-end min-h-[400px]">
           <p className="font-body text-sm text-primary-foreground/50 mb-4 uppercase tracking-widest">New Collection</p>

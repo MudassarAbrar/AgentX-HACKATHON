@@ -6,7 +6,7 @@ import gallery3 from "@/assets/gallery-3.jpg";
 const LooksGallery = () => {
   return (
     <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
-      <div className="flex items-center justify-between mb-12">
+      <div className="flex items-center justify-between mb-12 scroll-reveal">
         <h2 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
           Latest Looks
         </h2>
@@ -15,7 +15,7 @@ const LooksGallery = () => {
         </a>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 scroll-reveal">
         {/* Large landscape */}
         <div className="col-span-2 rounded-3xl overflow-hidden aspect-[16/9] group">
           <img src={gallery1} alt="Street style lookbook" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />

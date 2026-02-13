@@ -19,7 +19,7 @@ const ProductGrid = () => {
   return (
     <section className="py-20 lg:py-28 px-6 lg:px-12 max-w-[1440px] mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-12">
+      <div className="flex items-center justify-between mb-12 scroll-reveal">
         <h2 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(1.75rem, 3vw, 2.5rem)" }}>
           Ready to Wear
         </h2>
@@ -29,7 +29,7 @@ const ProductGrid = () => {
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8 scroll-reveal">
         {products.map((product) => (
           <div key={product.name} className="group cursor-pointer">
             <div className="rounded-2xl lg:rounded-3xl overflow-hidden bg-secondary aspect-[3/4] mb-4">
