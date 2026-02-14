@@ -1,39 +1,106 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, FormEvent, useMemo } from "react";
 import { ClerkAgent, type ClerkResponse } from "@/lib/ai/clerk-agent";
 import { useFilter } from "@/contexts/FilterContext";
 import { useCart } from "@/contexts/CartContext";
+import { useUserAuth } from "@/contexts/UserAuthContext";
+import { Send, Bot, Paperclip, Mic, CornerDownLeft, Sparkles, Star, ExternalLink, User } from "lucide-react";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, X, Minimize2, Maximize2, Sparkles } from "lucide-react";
-import { Link } from "react-router-dom";
+import {
+  ChatBubble,
+  ChatBubbleAvatar,
+  ChatBubbleMessage,
+} from "@/components/ui/chat-bubble";
+import { ChatInput } from "@/components/ui/chat-input";
+import {
+  ExpandableChat,
+  ExpandableChatHeader,
+  ExpandableChatBody,
+  ExpandableChatFooter,
+} from "@/components/ui/expandable-chat";
+import { ChatMessageList } from "@/components/ui/chat-message-list";
+import { addToSearchHistory } from "@/lib/api/products";
 import type { Product } from "@/lib/api/products";
+import { toast } from "sonner";
+
+// Format markdown-like text to React elements
+const formatMessage = (text: string): React.ReactNode[] => {
+  const elements: React.ReactNode[] = [];
+  let key = 0;
+  
+  // Split by lines first to handle bullet points
+  const lines = text.split('\n');
+  
+  lines.forEach((line, lineIndex) => {
+    // Process each line for bold text
+    const parts = line.split(/(\*\*[^*]+\*\*)/g);
+    const lineElements: React.ReactNode[] = [];
+    
+    parts.forEach((part, partIndex) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        // Bold text
+        lineElements.push(<strong key={`${key++}`}>{part.slice(2, -2)}</strong>);
+      } else if (part) {
+        // Regular text - also handle *italic* if present
+        const italicParts = part.split(/(\*[^*]+\*)/g);
+        italicParts.forEach((iPart) => {
+          if (iPart.startsWith("*") && iPart.endsWith("*") && !iPart.startsWith("**")) {
+            lineElements.push(<em key={`${key++}`}>{iPart.slice(1, -1)}</em>);
+          } else if (iPart) {
+            lineElements.push(iPart);
+          }
+        });
+      }
+    });
+    
+    // Add the line content
+    if (lineElements.length > 0) {
+      elements.push(<span key={`line-${lineIndex}`}>{lineElements}</span>);
+    }
+    
+    // Add line break if not the last line
+    if (lineIndex < lines.length - 1) {
+      elements.push(<br key={`br-${lineIndex}`} />);
+    }
+  });
+  
+  return elements;
+};
 
 interface Message {
+  id: number;
   role: "user" | "assistant";
   content: string;
   products?: Product[];
   action?: any;
   timestamp: Date;
+  couponCode?: string;
 }
 
 const ClerkChat = () => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user, isAuthenticated } = useUserAuth();
+  
+  // Get user avatar URL or use default placeholder
+  const userAvatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const userDisplayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "You";
+  const userInitial = userDisplayName.charAt(0).toUpperCase();
+  
   const [messages, setMessages] = useState<Message[]>([
     {
+      id: 1,
       role: "assistant",
-      content: "Hi! I'm The Clerk, your AI personal shopper. How can I help you find the perfect fashion items today?",
+      content: "Hi! I'm The Clerk, your AI personal shopper. I can help you:\n\n• Find products (\"Show me summer outfits\")\n• Add items to cart (\"Add the blazer to my cart\")\n• Filter the shop (\"Show me cheaper options\")\n• Get discounts (\"It's my birthday!\")\n\nWhat are you looking for today?",
       timestamp: new Date(),
     },
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<ClerkAgent | null>(null);
-  const { applyFilter } = useFilter();
-  const { addItem } = useCart();
+  const { applyFilter, setSort, setCategory, setSearchQuery } = useFilter();
+  const { addItem, applyCoupon } = useCart();
 
   // Initialize agent
   useEffect(() => {
@@ -50,12 +117,8 @@ const ClerkChat = () => {
     return sessionId;
   };
 
-  // Scroll to bottom when new messages arrive
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSend = async () => {
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
     if (!input.trim() || isLoading || !agentRef.current) return;
 
     const userMessage = input.trim();
@@ -64,6 +127,7 @@ const ClerkChat = () => {
 
     // Add user message
     const userMsg: Message = {
+      id: Date.now(),
       role: "user",
       content: userMessage,
       timestamp: new Date(),
@@ -74,23 +138,30 @@ const ClerkChat = () => {
       const sessionId = getSessionId();
       const response = await agentRef.current.chat(userMessage, sessionId);
 
+      // Extract coupon code from message if present
+      const couponMatch = response.message.match(/\*\*([A-Z0-9-]+)\*\*/);
+      const couponCode = couponMatch ? couponMatch[1] : undefined;
+
       // Add assistant response
       const assistantMsg: Message = {
+        id: Date.now() + 1,
         role: "assistant",
         content: response.message,
         products: response.products,
         action: response.action,
         timestamp: new Date(),
+        couponCode,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
       // Handle actions
       if (response.action) {
-        handleAction(response.action);
+        await handleAction(response.action, response.products);
       }
     } catch (error) {
       console.error("Error chatting with Clerk:", error);
       const errorMsg: Message = {
+        id: Date.now() + 1,
         role: "assistant",
         content: "I'm sorry, I encountered an error. Could you please try again?",
         timestamp: new Date(),
@@ -101,19 +172,86 @@ const ClerkChat = () => {
     }
   };
 
-  const handleAction = (action: any) => {
+  const handleAction = async (action: any, products?: Product[]) => {
+    console.log("[ClerkChat] Handling action:", action);
+    
     if (action.type === "filter" && action.payload) {
-      const { filterType, value } = action.payload;
-      applyFilter(filterType, value);
+      const { filterType, value, action: payloadAction, couponCode, searchQuery, productKeywords } = action.payload;
+      
+      // Handle coupon - DON'T auto-apply or navigate, just show the code
+      if (payloadAction === "apply_coupon" && couponCode) {
+        // Don't auto-apply - user will click the button
+        console.log("[ClerkChat] Coupon generated:", couponCode);
+        return;
+      }
+      
+      // Apply filter and navigate
+      if (filterType === "sort_by_price") {
+        console.log("[ClerkChat] Applying sort_by_price:", value);
+        setSort("price", value as "asc" | "desc");
+        toast.success(`Sorting by price: ${value === "asc" ? "Low to High" : "High to Low"}`);
+      } else if (filterType === "filter_by_category") {
+        console.log("[ClerkChat] Applying filter_by_category:", value);
+        setCategory(value);
+        // If we have product keywords (like "sneakers"), use those for search too
+        if (productKeywords) {
+          setSearchQuery(productKeywords);
+          // Track search history for recommendations
+          addToSearchHistory(productKeywords, value, productKeywords ? [productKeywords] : undefined);
+        } else {
+          // Track category search in history
+          addToSearchHistory(value, value, [value.toLowerCase()]);
+        }
+        toast.success(`Showing ${value} - check the shop!`, {
+          duration: 3000,
+        });
+      } else if (filterType === "search") {
+        // Search query - this updates the shop to show relevant products
+        console.log("[ClerkChat] Applying search filter:", value);
+        // Use product keywords if available, otherwise use the search query
+        const searchTerm = productKeywords || value;
+        setSearchQuery(searchTerm);
+        // Track search history for recommendations
+        const keywords = productKeywords ? [productKeywords] : searchTerm.split(/\s+/).filter((w: string) => w.length > 2);
+        addToSearchHistory(searchTerm, undefined, keywords);
+        toast.success(`Showing results for "${searchTerm}"`, {
+          duration: 3000,
+        });
+      } else if (filterType) {
+        console.log("[ClerkChat] Applying filter:", filterType, value);
+        applyFilter(filterType, value);
+      }
+      
+      // Navigate to shop page
+      if (location.pathname !== "/shop") {
+        navigate("/shop");
+      }
     } else if (action.type === "add_to_cart" && action.payload) {
       const { productId, size, quantity } = action.payload;
-      // The cart context will handle this
-    } else if (action.payload?.action === "apply_coupon") {
-      // Coupon will be handled by the cart context
+      // Find the product from the response or recent products
+      let product = products?.find(p => p.id === productId);
+      
+      // If not found in current products, search in recent messages
+      if (!product) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].products) {
+            product = messages[i].products?.find(p => p.id === productId);
+            if (product) break;
+          }
+        }
+      }
+      
+      if (product) {
+        await handleProductAddToCart(product, size || product.sizes?.[0] || "M", quantity || 1);
+      } else {
+        console.warn("[ClerkChat] Product not found for add_to_cart action:", productId);
+      }
+    } else if (action.type === "navigate" && action.payload) {
+      navigate(action.payload.path);
     }
   };
 
-  const handleProductAddToCart = async (product: Product, size: string) => {
+  const handleProductAddToCart = async (product: Product, size: string, quantity: number = 1) => {
     try {
       await addItem({
         id: product.id,
@@ -122,195 +260,228 @@ const ClerkChat = () => {
         price: product.price,
         image: product.image_url,
         size,
-        quantity: 1,
+        quantity,
       });
 
+      toast.success(`Added ${product.name} to cart!`);
+      
       const successMsg: Message = {
+        id: Date.now(),
         role: "assistant",
-        content: `Great! I've added ${product.name} (size: ${size}) to your cart.`,
+        content: `✓ Added ${product.name} (size: ${size}) to your cart! Would you like to continue shopping or checkout?`,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, successMsg]);
     } catch (error) {
       console.error("Error adding to cart:", error);
+      toast.error("Failed to add to cart. Please try again.");
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const handleApplyCoupon = async (code: string) => {
+    try {
+      const result = await applyCoupon(code);
+      if (result.success) {
+        toast.success(`Coupon ${code} applied successfully!`);
+        navigate("/cart");
+      } else {
+        toast.error(result.error || "Invalid coupon code");
+      }
+    } catch (error) {
+      toast.error("Failed to apply coupon");
     }
   };
 
-  if (!isOpen) {
-    return (
-      <button
-        onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full bg-foreground text-primary-foreground shadow-lg hover:scale-110 transition-transform flex items-center justify-center"
-        aria-label="Open Clerk chat"
-      >
-        <Sparkles className="w-6 h-6" />
-      </button>
-    );
-  }
+  const handleAttachFile = () => {
+    // Future: file attachment feature
+  };
+
+  const handleMicrophoneClick = () => {
+    // Future: voice input feature
+  };
 
   return (
-    <div
-      className={`fixed bottom-6 right-6 z-50 flex flex-col bg-background border border-border rounded-2xl shadow-2xl transition-all duration-300 ${
-        isMinimized ? "h-16 w-80" : "h-[600px] w-96"
-      }`}
+    <ExpandableChat
+      size="lg"
+      position="bottom-right"
+      icon={<Sparkles className="h-6 w-6" />}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-accent-foreground" />
-          </div>
-          <div>
-            <h3 className="font-display font-semibold text-sm">The Clerk</h3>
-            <p className="text-xs text-muted-foreground">AI Personal Shopper</p>
-          </div>
+      <ExpandableChatHeader className="flex-col text-center justify-center">
+        <div className="flex items-center justify-center gap-2 mb-1">
+          <Sparkles className="h-5 w-5 text-primary" />
+          <h1 className="text-xl font-semibold">The Clerk</h1>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            aria-label={isMinimized ? "Maximize" : "Minimize"}
-          >
-            {isMinimized ? (
-              <Maximize2 className="w-4 h-4" />
-            ) : (
-              <Minimize2 className="w-4 h-4" />
-            )}
-          </button>
-          <button
-            onClick={() => setIsOpen(false)}
-            className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            aria-label="Close chat"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
+        <p className="text-sm text-muted-foreground">
+          Your AI Personal Shopper
+        </p>
+      </ExpandableChatHeader>
 
-      {!isMinimized && (
-        <>
-          {/* Messages */}
-          <ScrollArea className="flex-1 p-4">
-            <div className="space-y-4">
-              {messages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+      <ExpandableChatBody>
+        <ChatMessageList>
+          {messages.map((message) => (
+            <ChatBubble
+              key={message.id}
+              variant={message.role === "user" ? "sent" : "received"}
+            >
+              <ChatBubbleAvatar
+                className="h-8 w-8 shrink-0"
+                src={
+                  message.role === "user"
+                    ? userAvatarUrl || undefined
+                    : undefined
+                }
+                fallback={message.role === "user" ? userInitial : "AI"}
+              />
+              <div className="flex-1 min-w-0">
+                <ChatBubbleMessage
+                  variant={message.role === "user" ? "sent" : "received"}
                 >
-                  <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                      msg.role === "user"
-                        ? "bg-foreground text-primary-foreground"
-                        : "bg-secondary text-foreground"
-                    }`}
-                  >
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  <p className="text-sm whitespace-pre-wrap">{formatMessage(message.content)}</p>
+                </ChatBubbleMessage>
 
-                    {/* Product Cards */}
-                    {msg.products && msg.products.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        {msg.products.map((product) => (
-                          <Card
-                            key={product.id}
-                            className="p-3 bg-background border border-border"
-                          >
-                            <div className="flex gap-3">
-                              <img
-                                src={product.image_url}
-                                alt={product.name}
-                                className="w-16 h-16 rounded-lg object-cover"
-                              />
-                              <div className="flex-1 min-w-0">
-                                <Link
-                                  to={`/product/${product.id}`}
-                                  className="font-display font-medium text-sm hover:text-accent transition-colors block"
-                                >
-                                  {product.name}
-                                </Link>
-                                <p className="font-display font-bold text-sm mt-1">
-                                  ${product.price}
-                                </p>
-                                <div className="flex gap-2 mt-2">
-                                  <Link
-                                    to={`/product/${product.id}`}
-                                    className="text-xs text-muted-foreground hover:text-foreground"
-                                  >
-                                    View →
-                                  </Link>
-                                  {product.sizes && product.sizes.length > 0 && (
-                                    <button
-                                      onClick={() =>
-                                        handleProductAddToCart(
-                                          product,
-                                          product.sizes[0]
-                                        )
-                                      }
-                                      className="text-xs text-accent hover:underline"
-                                    >
-                                      Add to Cart
-                                    </button>
-                                  )}
-                                </div>
+                {/* Product Cards - Rich Results */}
+                {message.products && message.products.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {message.products.map((product) => (
+                      <Card
+                        key={product.id}
+                        className="p-3 bg-background border border-border hover:border-primary/50 transition-colors"
+                      >
+                        <div className="flex gap-3">
+                          <Link to={`/product/${product.id}`} className="shrink-0">
+                            <img
+                              src={product.image_url}
+                              alt={product.name}
+                              className="w-20 h-20 rounded-lg object-cover hover:opacity-90 transition-opacity"
+                            />
+                          </Link>
+                          <div className="flex-1 min-w-0">
+                            <Link
+                              to={`/product/${product.id}`}
+                              className="font-medium text-sm hover:text-primary transition-colors block truncate"
+                            >
+                              {product.name}
+                            </Link>
+                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                              {product.category} • {product.stock > 0 ? "In Stock" : "Out of Stock"}
+                            </p>
+                            <div className="flex items-center gap-1 mt-1">
+                              <div className="flex items-center">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star key={star} className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                                ))}
                               </div>
+                              <span className="text-xs text-muted-foreground">(4.8)</span>
                             </div>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
+                            <p className="font-bold text-sm mt-1 text-primary">
+                              ${product.price}
+                            </p>
+                            <div className="flex gap-2 mt-2">
+                              <Link
+                                to={`/product/${product.id}`}
+                                className="text-xs bg-secondary px-2 py-1 rounded hover:bg-secondary/80 flex items-center gap-1"
+                              >
+                                <ExternalLink className="w-3 h-3" /> View
+                              </Link>
+                              {product.sizes && product.sizes.length > 0 && (
+                                <button
+                                  onClick={() =>
+                                    handleProductAddToCart(
+                                      product,
+                                      product.sizes[0],
+                                      1
+                                    )
+                                  }
+                                  className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded hover:bg-primary/90"
+                                >
+                                  Add to Cart
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
                   </div>
-                </div>
-              ))}
-              {isLoading && (
-                <div className="flex justify-start">
-                  <div className="bg-secondary rounded-2xl px-4 py-2">
-                    <div className="flex gap-1">
-                      <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                      <div
-                        className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      />
-                      <div
-                        className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      />
+                )}
+                
+                {/* Coupon Code Display */}
+                {message.couponCode && (
+                  <div className="mt-3 p-3 bg-accent/10 border border-accent/30 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-1">Your discount code:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="bg-background px-2 py-1 rounded text-sm font-mono font-bold">
+                        {message.couponCode}
+                      </code>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs h-7"
+                        onClick={() => handleApplyCoupon(message.couponCode!)}
+                      >
+                        Apply to Cart
+                      </Button>
                     </div>
                   </div>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-          </ScrollArea>
+                )}
+              </div>
+            </ChatBubble>
+          ))}
 
-          {/* Input */}
-          <div className="p-4 border-t border-border">
-            <div className="flex gap-2">
-              <Input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder="Ask me anything about products..."
-                className="flex-1"
-                disabled={isLoading}
+          {isLoading && (
+            <ChatBubble variant="received">
+              <ChatBubbleAvatar
+                className="h-8 w-8 shrink-0"
+                fallback="AI"
               />
+              <ChatBubbleMessage isLoading />
+            </ChatBubble>
+          )}
+        </ChatMessageList>
+      </ExpandableChatBody>
+
+      <ExpandableChatFooter>
+        <form
+          onSubmit={handleSubmit}
+          className="relative rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring p-1"
+        >
+          <ChatInput
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask me anything about products..."
+            className="min-h-12 resize-none rounded-lg bg-background border-0 p-3 shadow-none focus-visible:ring-0"
+            disabled={isLoading}
+          />
+          <div className="flex items-center p-3 pt-0 justify-between">
+            <div className="flex">
               <Button
-                onClick={handleSend}
-                disabled={!input.trim() || isLoading}
+                variant="ghost"
                 size="icon"
+                type="button"
+                onClick={handleAttachFile}
+                className="opacity-50"
               >
-                <Send className="w-4 h-4" />
+                <Paperclip className="size-4" />
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={handleMicrophoneClick}
+                className="opacity-50"
+              >
+                <Mic className="size-4" />
               </Button>
             </div>
+            <Button type="submit" size="sm" className="ml-auto gap-1.5" disabled={!input.trim() || isLoading}>
+              Send
+              <CornerDownLeft className="size-3.5" />
+            </Button>
           </div>
-        </>
-      )}
-    </div>
+        </form>
+      </ExpandableChatFooter>
+    </ExpandableChat>
   );
 };
 

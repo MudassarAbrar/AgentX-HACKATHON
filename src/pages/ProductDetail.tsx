@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Minus, Plus, ShoppingBag, Check } from "lucide-react";
+import { ArrowLeft, Minus, Plus, ShoppingBag, Check, Loader2 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import { products } from "@/lib/products";
+import { getProductByIdUniversal, getProducts, type Product } from "@/lib/api/products";
 import { useCart } from "@/contexts/CartContext";
 import { toast } from "sonner";
 
@@ -11,9 +11,46 @@ const ProductDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { addItem } = useCart();
-  const product = products.find((p) => p.id === Number(id));
+  const [product, setProduct] = useState<Product | null>(null);
+  const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedSize, setSelectedSize] = useState("");
   const [quantity, setQuantity] = useState(1);
+
+  useEffect(() => {
+    const fetchProduct = async () => {
+      if (!id) return;
+      setLoading(true);
+      try {
+        const productData = await getProductByIdUniversal(id);
+        setProduct(productData);
+        
+        // Fetch related products
+        if (productData) {
+          const allProducts = await getProducts({ category: productData.category });
+          const related = allProducts.filter((p) => p.id !== productData.id).slice(0, 4);
+          setRelatedProducts(related);
+        }
+      } catch (error) {
+        console.error("Error fetching product:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProduct();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="pt-32 text-center flex flex-col items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mb-4" />
+          <p className="font-body text-muted-foreground">Loading product...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!product) {
     return (
@@ -27,23 +64,26 @@ const ProductDetail = () => {
     );
   }
 
-  const handleAddToCart = () => {
+  const handleAddToCart = async () => {
     if (!selectedSize) {
       toast.error("Please select a size");
       return;
     }
-    addItem({
-      id: product.id,
-      name: product.name,
-      price: product.price,
-      image: product.image,
-      size: selectedSize,
-      quantity,
-    });
-    toast.success(`${product.name} added to cart`);
+    try {
+      await addItem({
+        id: product.id,
+        productId: product.id,
+        name: product.name,
+        price: product.price,
+        image: product.image_url,
+        size: selectedSize,
+        quantity,
+      });
+      toast.success(`${product.name} added to cart`);
+    } catch (error) {
+      toast.error("Failed to add to cart");
+    }
   };
-
-  const related = products.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 4);
 
   return (
     <div className="min-h-screen bg-background">
@@ -56,7 +96,7 @@ const ProductDetail = () => {
         <div className="grid md:grid-cols-2 gap-10 lg:gap-16">
           {/* Image */}
           <div className="rounded-3xl overflow-hidden bg-secondary aspect-[3/4]">
-            <img src={product.image} alt={product.name} className="w-full h-full object-cover" />
+            <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
           </div>
 
           {/* Details */}
@@ -113,14 +153,14 @@ const ProductDetail = () => {
         </div>
 
         {/* Related */}
-        {related.length > 0 && (
+        {relatedProducts.length > 0 && (
           <div className="mt-20">
             <h2 className="font-display font-bold text-foreground text-2xl mb-8">You may also like</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-5 lg:gap-8">
-              {related.map((p) => (
+              {relatedProducts.map((p) => (
                 <Link to={`/product/${p.id}`} key={p.id} className="group">
                   <div className="rounded-2xl overflow-hidden bg-secondary aspect-[3/4] mb-3">
-                    <img src={p.image} alt={p.name} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" loading="lazy" />
+                    <img src={p.image_url} alt={p.name} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" loading="lazy" />
                   </div>
                   <h3 className="font-display font-medium text-foreground text-sm">{p.name}</h3>
                   <p className="font-display font-semibold text-foreground mt-1">${p.price}</p>

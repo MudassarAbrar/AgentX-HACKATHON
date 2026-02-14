@@ -1,73 +1,103 @@
-# Welcome to your Lovable project
+# TrendZone - AI-Powered Fashion E-Commerce
 
-## Project info
+TrendZone is a modern e-commerce platform with an AI Personal Shopper (The Clerk) that helps customers find products, negotiate deals, and enjoy a personalized shopping experience.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Features
 
-## How can I edit this code?
+### Storefront
+- **Product Catalog** - Browse curated fashion collections
+- **Product Detail** - View product information, sizes, and related items
+- **Shopping Cart** - Add items, apply coupons, and checkout
+- **Responsive Design** - Works on all devices
 
-There are several ways of editing your application.
+### AI Personal Shopper (The Clerk)
+- **Semantic Search** - "Show me summer outfits for a wedding in Italy"
+- **Inventory Check** - "Do you have this in size M?"
+- **Add to Cart via Chat** - "Add the blazer to my cart"
+- **Vibe Filter** - "Show me cheaper options" (updates UI in real-time)
+- **Haggle Mode** - Negotiate discounts for special occasions
 
-**Use Lovable**
+### Admin Panel
+- **Dashboard** - Overview of sales, orders, and products
+- **Product Management** - Add, edit, delete products with image upload
+- **Order Management** - View and update order status
+- **Coupon Management** - Create and manage discount codes
+- **Settings** - Configure store and AI behavior
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+## Tech Stack
 
-Changes made via Lovable will be committed automatically to this repo.
+- **Frontend**: React + TypeScript + Vite
+- **Styling**: Tailwind CSS + shadcn/ui
+- **State Management**: React Context + TanStack Query
+- **Backend**: Supabase (PostgreSQL + Auth + Storage)
+- **AI**: Google Gemini 2.5 Flash
 
-**Use your preferred IDE**
+## Getting Started
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Prerequisites
+- Node.js 18+
+- npm or yarn
+- Supabase account (optional, works with mock data)
+- Google Gemini API key (optional, for AI features)
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Installation
 
-Follow these steps:
+```bash
+# Clone the repository
+git clone <your-repo-url>
+cd bold-canvas
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# Install dependencies
+npm install
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your API keys
 
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Run the development server
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+### Environment Variables
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Create a `.env` file with:
 
-**Use GitHub Codespaces**
+```env
+VITE_SUPABASE_URL=your-supabase-url
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_GEMINI_API_KEY=your-gemini-api-key
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### Database Setup
 
-## What technologies are used for this project?
+1. Create a new Supabase project
+2. Run the SQL scripts in order:
+   - `supabase/schema.sql` - Create tables
+   - `supabase/seed-products.sql` - Add sample products
+   - `supabase/admin-setup.sql` - Set up admin features
 
-This project is built with:
+## Admin Access
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+Navigate to `/admin/login` and use:
+- **Email**: admin@trendzone.com
+- **Password**: admin123
 
-## How can I deploy this project?
+## Project Structure
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+```
+src/
+├── components/       # Reusable UI components
+│   ├── admin/       # Admin-specific components
+│   └── ui/          # shadcn/ui components
+├── contexts/        # React contexts (Auth, Cart, Filter)
+├── lib/            
+│   ├── ai/          # AI agent and RAG logic
+│   └── api/         # API functions
+├── pages/           # Page components
+│   └── admin/       # Admin pages
+└── hooks/           # Custom React hooks
+```
 
-## Can I connect a custom domain to my Lovable project?
+## License
 
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+MIT License

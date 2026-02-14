@@ -20,24 +20,105 @@ export async function analyzeHaggleRequest(
   reason: string;
   sentiment: "positive" | "neutral" | "negative";
 }> {
+  const lowerMessage = userMessage.toLowerCase();
+  
+  // Check for common good reasons FIRST (before AI call)
+  // This ensures birthday/wedding etc. ALWAYS work
+  const hasBirthday = lowerMessage.includes("birthday") || lowerMessage.includes("birth day") || lowerMessage.includes("bday");
+  const hasWedding = lowerMessage.includes("wedding") || lowerMessage.includes("marry") || lowerMessage.includes("marriage") || lowerMessage.includes("getting married");
+  const hasFirstTime = lowerMessage.includes("first time") || lowerMessage.includes("new customer") || lowerMessage.includes("first order");
+  const hasBulk = lowerMessage.includes("bulk") || lowerMessage.includes("multiple") || lowerMessage.includes("buying two") || lowerMessage.includes("buying 2") || lowerMessage.includes("several items");
+  const hasValentine = lowerMessage.includes("valentine") || lowerMessage.includes("love");
+  const hasStudent = lowerMessage.includes("student");
+  const hasLoyalCustomer = lowerMessage.includes("loyal") || lowerMessage.includes("regular customer") || lowerMessage.includes("shop here often");
+  
+  // Determine discount based on reason
+  if (hasBirthday) {
+    return {
+      eligible: true,
+      discountPercent: 15,
+      reason: "Birthday celebration",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasWedding) {
+    return {
+      eligible: true,
+      discountPercent: 20,
+      reason: "Wedding celebration",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasFirstTime) {
+    return {
+      eligible: true,
+      discountPercent: 10,
+      reason: "First-time customer",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasBulk) {
+    return {
+      eligible: true,
+      discountPercent: 12,
+      reason: "Bulk purchase",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasValentine) {
+    return {
+      eligible: true,
+      discountPercent: 10,
+      reason: "Valentine's Day",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasStudent) {
+    return {
+      eligible: true,
+      discountPercent: 10,
+      reason: "Student discount",
+      sentiment: "positive",
+    };
+  }
+  
+  if (hasLoyalCustomer) {
+    return {
+      eligible: true,
+      discountPercent: 10,
+      reason: "Loyal customer",
+      sentiment: "positive",
+    };
+  }
+  
+  // Check for rude behavior
+  const rudeWords = ["stupid", "idiot", "dumb", "hate", "sucks", "worst", "terrible", "awful", "garbage", "trash"];
+  const isRude = rudeWords.some(word => lowerMessage.includes(word));
+  
+  if (isRude) {
+    return {
+      eligible: false,
+      discountPercent: 0,
+      reason: "Rude behavior detected",
+      sentiment: "negative",
+    };
+  }
+  
+  // Try AI analysis for more complex requests
   try {
     const model = getGeminiModel("gemini-2.5-flash");
     
     if (!model) {
-      // Fallback logic when Gemini is not available
-      const lowerMessage = userMessage.toLowerCase();
-      if (lowerMessage.includes("birthday") || lowerMessage.includes("first time") || lowerMessage.includes("bulk")) {
-        return {
-          eligible: true,
-          discountPercent: 10,
-          reason: "Special occasion",
-          sentiment: "positive",
-        };
-      }
+      // No AI available and no keyword match
       return {
         eligible: false,
         discountPercent: 0,
-        reason: "Request not eligible",
+        reason: "No valid reason provided",
         sentiment: "neutral",
       };
     }
@@ -75,31 +156,22 @@ Respond in JSON format only:
         analysis = JSON.parse(jsonMatch[0]);
       }
     } catch (e) {
-      console.warn("[Haggle] Failed to parse Gemini response, using fallback");
-      // Fallback: check for common good reasons
-      const lowerMessage = userMessage.toLowerCase();
-      if (
-        lowerMessage.includes("birthday") ||
-        lowerMessage.includes("first time") ||
-        lowerMessage.includes("bulk") ||
-        lowerMessage.includes("multiple")
-      ) {
-        analysis = {
-          eligible: true,
-          discountPercent: 10,
-          reason: "Special occasion",
-          sentiment: "positive",
-        };
-      }
+      console.warn("[Haggle] Failed to parse Gemini response");
+      return {
+        eligible: false,
+        discountPercent: 0,
+        reason: "Unable to process request",
+        sentiment: "neutral",
+      };
     }
 
     // If user is rude, make them ineligible
-    if (analysis.sentiment === "negative" || !analysis.eligible) {
+    if (analysis.sentiment === "negative") {
       return {
         eligible: false,
         discountPercent: 0,
         reason: analysis.reason || "Request not eligible",
-        sentiment: analysis.sentiment || "neutral",
+        sentiment: "negative",
       };
     }
 
@@ -137,6 +209,7 @@ function generateCouponCode(reason: string, discount: number): string {
   // Common prefixes for known reasons
   const lowerReason = reason.toLowerCase();
   if (lowerReason.includes("birthday")) prefix = "BDAY";
+  if (lowerReason.includes("wedding") || lowerReason.includes("marry")) prefix = "WEDDING";
   if (lowerReason.includes("first")) prefix = "WELCOME";
   if (lowerReason.includes("bulk")) prefix = "BULK";
   if (lowerReason.includes("love") || lowerReason.includes("valentine"))
@@ -147,8 +220,17 @@ function generateCouponCode(reason: string, discount: number): string {
   return `${prefix}-${discount}${suffix}`;
 }
 
+// Local coupon storage for when Supabase is not available
+const localCoupons: Map<string, {
+  code: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: number;
+  reason: string;
+  valid_until: string;
+}> = new Map();
+
 /**
- * Create coupon in database
+ * Create coupon in database (or local storage as fallback)
  */
 async function createCoupon(
   code: string,
@@ -157,32 +239,83 @@ async function createCoupon(
   reason: string,
   validDays: number = 30
 ): Promise<boolean> {
-  if (!supabase) {
-    return false;
-  }
-
   const now = new Date();
   const validUntil = new Date();
   validUntil.setDate(validUntil.getDate() + validDays);
 
-  const { error } = await supabase.from("coupons").insert({
+  // Try Supabase first
+  if (supabase) {
+    try {
+      const { error } = await supabase.from("coupons").insert({
+        code: code.toUpperCase(),
+        discount_type: discountType,
+        discount_value: discountValue,
+        valid_from: now.toISOString(),
+        valid_until: validUntil.toISOString(),
+        usage_limit: 1, // Single use coupon
+        used_count: 0,
+        created_by_agent: true,
+        reason,
+      });
+
+      if (!error) {
+        return true;
+      }
+      console.warn("[Haggle] Supabase insert failed, using local storage:", error);
+    } catch (error) {
+      console.warn("[Haggle] Supabase error, using local storage:", error);
+    }
+  }
+
+  // Fallback: store locally and in localStorage for persistence
+  localCoupons.set(code.toUpperCase(), {
     code: code.toUpperCase(),
     discount_type: discountType,
     discount_value: discountValue,
-    valid_from: now.toISOString(),
-    valid_until: validUntil.toISOString(),
-    usage_limit: 1, // Single use coupon
-    used_count: 0,
-    created_by_agent: true,
     reason,
+    valid_until: validUntil.toISOString(),
   });
 
-  if (error) {
-    console.error("[Haggle] Error creating coupon:", error);
-    return false;
+  // Also store in localStorage for persistence
+  try {
+    const storedCoupons = JSON.parse(localStorage.getItem("clerk_coupons") || "{}");
+    storedCoupons[code.toUpperCase()] = {
+      code: code.toUpperCase(),
+      discount_type: discountType,
+      discount_value: discountValue,
+      reason,
+      valid_until: validUntil.toISOString(),
+    };
+    localStorage.setItem("clerk_coupons", JSON.stringify(storedCoupons));
+  } catch (e) {
+    console.warn("[Haggle] Failed to store coupon in localStorage");
   }
 
   return true;
+}
+
+/**
+ * Get locally stored coupon
+ */
+export function getLocalCoupon(code: string): { discount_type: "percentage" | "fixed"; discount_value: number } | null {
+  // Check in-memory first
+  const memCoupon = localCoupons.get(code.toUpperCase());
+  if (memCoupon) {
+    return { discount_type: memCoupon.discount_type, discount_value: memCoupon.discount_value };
+  }
+
+  // Check localStorage
+  try {
+    const storedCoupons = JSON.parse(localStorage.getItem("clerk_coupons") || "{}");
+    const coupon = storedCoupons[code.toUpperCase()];
+    if (coupon && new Date(coupon.valid_until) > new Date()) {
+      return { discount_type: coupon.discount_type, discount_value: coupon.discount_value };
+    }
+  } catch (e) {
+    // Ignore
+  }
+
+  return null;
 }
 
 /**
@@ -230,7 +363,9 @@ export async function processHaggle(
   let friendlyMessage = "";
   const lowerReason = analysis.reason.toLowerCase();
   
-  if (lowerReason.includes("birthday")) {
+  if (lowerReason.includes("wedding") || lowerReason.includes("marry")) {
+    friendlyMessage = `Congratulations on your wedding! 💍 I've created a special ${analysis.discountPercent}% discount code just for you: **${couponCode}**. Use it at checkout!`;
+  } else if (lowerReason.includes("birthday")) {
     friendlyMessage = `Happy Birthday! 🎉 I've created a special ${analysis.discountPercent}% discount code just for you: **${couponCode}**. Use it at checkout!`;
   } else if (lowerReason.includes("first")) {
     friendlyMessage = `Welcome to TrendZone! 🎊 As a first-time customer, here's a ${analysis.discountPercent}% discount: **${couponCode}**. Enjoy your shopping!`;

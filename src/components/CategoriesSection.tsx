@@ -1,19 +1,45 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ArrowRight } from "lucide-react";
+import { Link } from "react-router-dom";
+import { getCategoryCounts, getProducts, type Product } from "@/lib/api/products";
 import product1 from "@/assets/product-1.jpg";
 import product2 from "@/assets/product-2.jpg";
 import product3 from "@/assets/product-3.jpg";
 import product4 from "@/assets/product-4.jpg";
 
-const categories = [
-  { name: "Clothes", count: "240+ items", image: product1 },
-  { name: "Shoes", count: "180+ items", image: product2 },
-  { name: "Bags", count: "95+ items", image: product3 },
-  { name: "Accessories", count: "310+ items", image: product4 },
-];
+const categoryImages: Record<string, string> = {
+  Clothes: product1,
+  Shoes: product2,
+  Bags: product3,
+  Accessories: product4,
+};
+
+const categoryOrder = ["Clothes", "Shoes", "Bags", "Accessories"];
 
 const CategoriesSection = () => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchCounts = async () => {
+      try {
+        const counts = await getCategoryCounts();
+        setCategoryCounts(counts);
+      } catch (error) {
+        console.error("Error fetching category counts:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchCounts();
+  }, []);
+
+  const categories = categoryOrder.map((name) => ({
+    name,
+    count: categoryCounts[name] || 0,
+    image: categoryImages[name] || product1,
+  }));
 
   return (
     <section className="py-12 lg:py-16 px-4 sm:px-6 lg:px-12 max-w-[1440px] mx-auto">
@@ -53,7 +79,8 @@ const CategoriesSection = () => {
 
         {/* Category rows */}
         {categories.map((cat, i) => (
-          <div
+          <Link
+            to={`/shop?category=${cat.name}`}
             key={cat.name}
             className="group flex items-center justify-between py-5 lg:py-7 border-b border-border cursor-pointer scroll-reveal"
             onMouseEnter={() => setHoveredIdx(i)}
@@ -69,10 +96,12 @@ const CategoriesSection = () => {
               </h3>
             </div>
             <div className="flex items-center gap-4">
-              <span className="font-body text-sm text-muted-foreground hidden sm:block">{cat.count}</span>
+              <span className="font-body text-sm text-muted-foreground hidden sm:block">
+                {loading ? "..." : `${cat.count} item${cat.count !== 1 ? "s" : ""}`}
+              </span>
               <ArrowRight className="w-5 h-5 text-foreground transition-transform duration-300 group-hover:translate-x-2" />
             </div>
-          </div>
+          </Link>
         ))}
       </div>
     </section>

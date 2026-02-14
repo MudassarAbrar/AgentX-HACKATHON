@@ -49,7 +49,48 @@ async function getLocalProducts(): Promise<Product[]> {
 }
 
 /**
- * Search local products by query
+ * Semantic matching for seasons, occasions, and styles
+ */
+const semanticMappings: { [key: string]: string[] } = {
+  // Seasons -> Products that fit
+  winter: ["overcoat", "sweater", "wool", "knit", "boots", "scarf"],
+  cold: ["overcoat", "sweater", "wool", "knit", "boots", "scarf"],
+  warm: ["linen", "cotton", "sneakers", "tote"],
+  summer: ["linen", "cotton", "sneakers", "tote", "blazer"],
+  spring: ["blazer", "trousers", "sneakers", "tote"],
+  fall: ["overcoat", "boots", "sweater", "jacket", "denim"],
+  autumn: ["overcoat", "boots", "sweater", "jacket", "denim"],
+  
+  // Occasions
+  casual: ["sneakers", "denim", "tote", "trousers"],
+  formal: ["blazer", "belt", "trousers", "overcoat"],
+  party: ["blazer", "belt", "boots"],
+  office: ["blazer", "trousers", "belt", "crossbody"],
+  date: ["blazer", "boots", "scarf"],
+  outdoor: ["sneakers", "jacket", "tote"],
+  
+  // Styles
+  classic: ["sneakers", "blazer", "trousers", "belt", "overcoat"],
+  elegant: ["blazer", "overcoat", "scarf", "boots"],
+  sporty: ["sneakers", "running"],
+  minimalist: ["sneakers", "tote", "belt"],
+  cozy: ["sweater", "knit", "scarf"],
+  
+  // Categories (direct mappings)
+  shoe: ["sneakers", "boots"],
+  shoes: ["sneakers", "boots"],
+  footwear: ["sneakers", "boots"],
+  bag: ["tote", "crossbody"],
+  bags: ["tote", "crossbody"],
+  clothing: ["blazer", "trousers", "overcoat", "sweater", "jacket"],
+  clothes: ["blazer", "trousers", "overcoat", "sweater", "jacket"],
+  outfit: ["blazer", "trousers", "sneakers", "belt"],
+  item: [], // Return all products
+  items: [], // Return all products
+};
+
+/**
+ * Search local products by query with semantic understanding
  */
 async function searchLocalProducts(query: string, limit: number): Promise<Product[]> {
   const localProducts = await getLocalProducts();
@@ -61,13 +102,37 @@ async function searchLocalProducts(query: string, limit: number): Promise<Produc
     .filter((w) => w.length > 2)
     .map((w) => w.replace(/[^a-z0-9]/g, ""));
 
-  // Search in name, description, category
-  const matches = localProducts.filter((product) => {
+  // Collect all matching product keywords from semantic mappings
+  const semanticKeywords: string[] = [];
+  for (const keyword of keywords) {
+    if (semanticMappings[keyword]) {
+      semanticKeywords.push(...semanticMappings[keyword]);
+    }
+  }
+  
+  // If we have semantic keywords, use them for matching
+  if (semanticKeywords.length > 0) {
+    const matches = localProducts.filter((product) => {
+      const searchText = `${product.name} ${product.description}`.toLowerCase();
+      return semanticKeywords.some((k) => searchText.includes(k));
+    });
+    
+    if (matches.length > 0) {
+      return matches.slice(0, limit);
+    }
+  }
+
+  // Direct keyword matching in product names and descriptions
+  const directMatches = localProducts.filter((product) => {
     const searchText = `${product.name} ${product.description} ${product.category}`.toLowerCase();
     return keywords.some((keyword) => searchText.includes(keyword));
   });
+  
+  if (directMatches.length > 0) {
+    return directMatches.slice(0, limit);
+  }
 
-  // Also try category matching
+  // Category-based matching
   const categoryMatches: { [key: string]: string[] } = {
     shoe: ["Shoes"],
     shoes: ["Shoes"],
@@ -75,6 +140,7 @@ async function searchLocalProducts(query: string, limit: number): Promise<Produc
     sneakers: ["Shoes"],
     boot: ["Shoes"],
     boots: ["Shoes"],
+    chelsea: ["Shoes"],
     pant: ["Clothes"],
     pants: ["Clothes"],
     trouser: ["Clothes"],
@@ -83,29 +149,43 @@ async function searchLocalProducts(query: string, limit: number): Promise<Produc
     blazer: ["Clothes"],
     jacket: ["Clothes"],
     sweater: ["Clothes"],
+    overcoat: ["Clothes"],
+    coat: ["Clothes"],
     bag: ["Bags"],
     bags: ["Bags"],
     tote: ["Bags"],
+    crossbody: ["Bags"],
     accessory: ["Accessories"],
     accessories: ["Accessories"],
     belt: ["Accessories"],
     scarf: ["Accessories"],
   };
 
+  const categoryResults: Product[] = [];
   for (const [keyword, categories] of Object.entries(categoryMatches)) {
     if (lowerQuery.includes(keyword)) {
-      const categoryMatches = localProducts.filter((p) =>
+      const matches = localProducts.filter((p) =>
         categories.includes(p.category)
       );
-      matches.push(...categoryMatches);
+      categoryResults.push(...matches);
     }
   }
+  
+  if (categoryResults.length > 0) {
+    // Remove duplicates
+    const uniqueMatches = Array.from(
+      new Map(categoryResults.map((p) => [p.id, p])).values()
+    );
+    return uniqueMatches.slice(0, limit);
+  }
+  
+  // If user asks for generic "items" or "products", return popular products
+  if (lowerQuery.includes("item") || lowerQuery.includes("product") || lowerQuery.includes("something")) {
+    return localProducts.slice(0, limit);
+  }
 
-  // Remove duplicates and limit
-  const uniqueMatches = Array.from(
-    new Map(matches.map((p) => [p.id, p])).values()
-  );
-  return uniqueMatches.slice(0, limit);
+  // Last resort - return all products (let user browse)
+  return localProducts.slice(0, limit);
 }
 
 /**

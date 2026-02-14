@@ -203,36 +203,55 @@ export async function clearCart(): Promise<boolean> {
  * Validate and get coupon details
  */
 export async function validateCoupon(code: string): Promise<Coupon | null> {
-  if (!supabase) {
-    console.warn("[Cart API] Supabase client not initialized");
-    return null;
+  // Try Supabase first
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("coupons")
+        .select("*")
+        .eq("code", code.toUpperCase())
+        .single();
+
+      if (!error && data) {
+        const now = new Date();
+        const validFrom = new Date(data.valid_from);
+        const validUntil = new Date(data.valid_until);
+
+        // Check if coupon is valid
+        if (now >= validFrom && now <= validUntil) {
+          // Check usage limit
+          if (!data.usage_limit || data.used_count < data.usage_limit) {
+            return data;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[Cart API] Supabase coupon check failed, trying local:", error);
+    }
   }
 
-  const { data, error } = await supabase
-    .from("coupons")
-    .select("*")
-    .eq("code", code.toUpperCase())
-    .single();
-
-  if (error || !data) {
-    return null;
+  // Fallback: Check local coupons (from haggle mode)
+  try {
+    const { getLocalCoupon } = await import("../ai/haggle");
+    const localCoupon = getLocalCoupon(code);
+    if (localCoupon) {
+      // Create a mock coupon object
+      return {
+        id: `local-${code}`,
+        code: code.toUpperCase(),
+        discount_type: localCoupon.discount_type,
+        discount_value: localCoupon.discount_value,
+        valid_from: new Date().toISOString(),
+        valid_until: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        used_count: 0,
+        created_by_agent: true,
+      };
+    }
+  } catch (error) {
+    console.warn("[Cart API] Local coupon check failed:", error);
   }
 
-  const now = new Date();
-  const validFrom = new Date(data.valid_from);
-  const validUntil = new Date(data.valid_until);
-
-  // Check if coupon is valid
-  if (now < validFrom || now > validUntil) {
-    return null;
-  }
-
-  // Check usage limit
-  if (data.usage_limit && data.used_count >= data.usage_limit) {
-    return null;
-  }
-
-  return data;
+  return null;
 }
 
 /**

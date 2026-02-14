@@ -14,6 +14,15 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = supabaseUrl && supabaseAnonKey
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        // Enable automatic session detection from URL (for OAuth callbacks)
+        detectSessionInUrl: true,
+        // Persist session in localStorage
+        persistSession: true,
+        // Auto-refresh the session when it expires
+        autoRefreshToken: true,
+      },
+    })
   : null;
 

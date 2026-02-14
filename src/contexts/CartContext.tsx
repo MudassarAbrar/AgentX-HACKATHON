@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
-import { getCart, addToCart, updateCartItem, removeCartItem, clearCart as clearCartAPI, getCartTotal } from "@/lib/api/cart";
-import type { CartItem as SupabaseCartItem } from "@/lib/api/cart";
+import { getCart, addToCart as addToCartAPI, updateCartItem as updateCartItemAPI, removeCartItem as removeCartItemAPI, clearCart as clearCartAPI, getCartTotal, validateCoupon } from "@/lib/api/cart";
+import type { CartItem as SupabaseCartItem, Coupon } from "@/lib/api/cart";
+
+const LOCAL_CART_KEY = "trendzone_cart";
 
 export interface CartItem {
   id: number | string;
@@ -35,16 +37,43 @@ export const useCart = () => {
   return ctx;
 };
 
+// Helper to load local cart
+function loadLocalCart(): CartItem[] {
+  try {
+    const stored = localStorage.getItem(LOCAL_CART_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Helper to save local cart
+function saveLocalCart(items: CartItem[]) {
+  try {
+    localStorage.setItem(LOCAL_CART_KEY, JSON.stringify(items));
+  } catch (e) {
+    console.warn("Failed to save cart to localStorage");
+  }
+}
+
 export const CartProvider = ({ children }: { children: ReactNode }) => {
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [couponCode, setCouponCode] = useState<string>();
   const [discount, setDiscount] = useState(0);
+  const [useLocalCart, setUseLocalCart] = useState(false);
 
-  // Load cart from Supabase on mount
+  // Load cart on mount
   useEffect(() => {
     loadCart();
   }, []);
+
+  // Save to localStorage whenever items change (if using local cart)
+  useEffect(() => {
+    if (useLocalCart && items.length > 0) {
+      saveLocalCart(items);
+    }
+  }, [items, useLocalCart]);
 
   // Update totals when items or coupon changes
   useEffect(() => {
@@ -55,18 +84,31 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     try {
       const supabaseItems = await getCart();
-      const formattedItems: CartItem[] = supabaseItems.map((item) => ({
-        id: item.id,
-        productId: item.product_id,
-        name: item.product?.name || "Unknown Product",
-        price: item.product?.price || 0,
-        image: item.product?.image_url || "",
-        size: item.size,
-        quantity: item.quantity,
-      }));
-      setItems(formattedItems);
+      if (supabaseItems.length > 0) {
+        const formattedItems: CartItem[] = supabaseItems.map((item) => ({
+          id: item.id,
+          productId: item.product_id,
+          name: item.product?.name || "Unknown Product",
+          price: item.product?.price || 0,
+          image: item.product?.image_url || "",
+          size: item.size,
+          quantity: item.quantity,
+        }));
+        setItems(formattedItems);
+        setUseLocalCart(false);
+      } else {
+        // Try loading from localStorage
+        const localItems = loadLocalCart();
+        if (localItems.length > 0) {
+          setItems(localItems);
+        }
+        setUseLocalCart(true);
+      }
     } catch (error) {
-      console.error("Error loading cart:", error);
+      console.warn("Supabase cart unavailable, using local storage:", error);
+      const localItems = loadLocalCart();
+      setItems(localItems);
+      setUseLocalCart(true);
     } finally {
       setLoading(false);
     }
@@ -77,32 +119,86 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
       setDiscount(0);
       return;
     }
-    try {
-      const totals = await getCartTotal(couponCode);
-      setDiscount(totals.discount);
-    } catch (error) {
-      console.error("Error calculating totals:", error);
+    
+    if (couponCode) {
+      try {
+        // Try to validate and calculate discount
+        const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+        const coupon = await validateCoupon(couponCode);
+        
+        if (coupon) {
+          let calcDiscount = 0;
+          if (coupon.discount_type === "percentage") {
+            calcDiscount = (subtotal * coupon.discount_value) / 100;
+          } else {
+            calcDiscount = coupon.discount_value;
+          }
+          setDiscount(calcDiscount);
+        } else {
+          setDiscount(0);
+          setCouponCode(undefined);
+        }
+      } catch (error) {
+        console.error("Error calculating totals:", error);
+      }
     }
   };
 
   const addItem = async (item: CartItem) => {
+    // Always add to local state first (for responsiveness)
+    setItems(prev => {
+      const existing = prev.find(i => 
+        (i.productId || i.id) === (item.productId || item.id) && i.size === item.size
+      );
+      
+      if (existing) {
+        return prev.map(i => 
+          (i.productId || i.id) === (item.productId || item.id) && i.size === item.size
+            ? { ...i, quantity: i.quantity + item.quantity }
+            : i
+        );
+      }
+      
+      // Generate local ID for new items
+      const newItem = {
+        ...item,
+        id: item.id || `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      };
+      return [...prev, newItem];
+    });
+    
+    // Also save to localStorage
+    const updatedItems = [...items];
+    const existing = updatedItems.find(i => 
+      (i.productId || i.id) === (item.productId || item.id) && i.size === item.size
+    );
+    if (existing) {
+      existing.quantity += item.quantity;
+    } else {
+      updatedItems.push({
+        ...item,
+        id: item.id || `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      });
+    }
+    saveLocalCart(updatedItems);
+
+    // Try Supabase in background (non-blocking)
     try {
       const productId = item.productId || String(item.id);
-      await addToCart(productId, item.size, item.quantity);
-      await loadCart();
+      await addToCartAPI(productId, item.size, item.quantity);
     } catch (error) {
-      console.error("Error adding item to cart:", error);
-      throw error;
+      console.warn("Supabase add to cart failed, using local cart:", error);
     }
   };
 
   const removeItem = async (id: number | string, size: string) => {
+    setItems(prev => prev.filter(i => !(String(i.id) === String(id) && i.size === size)));
+    saveLocalCart(items.filter(i => !(String(i.id) === String(id) && i.size === size)));
+    
     try {
-      await removeCartItem(String(id));
-      await loadCart();
+      await removeCartItemAPI(String(id));
     } catch (error) {
-      console.error("Error removing item from cart:", error);
-      throw error;
+      console.warn("Supabase remove failed, using local cart:", error);
     }
   };
 
@@ -111,33 +207,48 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
       await removeItem(id, size);
       return;
     }
+    
+    setItems(prev => prev.map(i => 
+      String(i.id) === String(id) && i.size === size ? { ...i, quantity } : i
+    ));
+    saveLocalCart(items.map(i => 
+      String(i.id) === String(id) && i.size === size ? { ...i, quantity } : i
+    ));
+    
     try {
-      await updateCartItem(String(id), quantity);
-      await loadCart();
+      await updateCartItemAPI(String(id), quantity);
     } catch (error) {
-      console.error("Error updating quantity:", error);
-      throw error;
+      console.warn("Supabase update failed, using local cart:", error);
     }
   };
 
   const clearCart = async () => {
+    setItems([]);
+    setCouponCode(undefined);
+    setDiscount(0);
+    saveLocalCart([]);
+    
     try {
       await clearCartAPI();
-      setItems([]);
-      setCouponCode(undefined);
-      setDiscount(0);
     } catch (error) {
-      console.error("Error clearing cart:", error);
-      throw error;
+      console.warn("Supabase clear failed:", error);
     }
   };
 
   const applyCoupon = async (code: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const totals = await getCartTotal(code);
-      if (totals.coupon) {
+      const coupon = await validateCoupon(code);
+      
+      if (coupon) {
         setCouponCode(code.toUpperCase());
-        setDiscount(totals.discount);
+        const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+        let calcDiscount = 0;
+        if (coupon.discount_type === "percentage") {
+          calcDiscount = (subtotal * coupon.discount_value) / 100;
+        } else {
+          calcDiscount = coupon.discount_value;
+        }
+        setDiscount(calcDiscount);
         return { success: true };
       } else {
         return { success: false, error: "Invalid or expired coupon code" };

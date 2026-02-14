@@ -1,18 +1,30 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { SlidersHorizontal } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { SlidersHorizontal, Loader2, Search, X } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useFilter } from "@/contexts/FilterContext";
-import { getProducts, type Product } from "@/lib/api/products";
+import { getProducts, searchProductsSemantic, addToSearchHistory, type Product } from "@/lib/api/products";
+import { toast } from "sonner";
 
 const categories = ["All", "Clothes", "Shoes", "Bags", "Accessories"];
 
 const Shop = () => {
-  const { filters, setCategory, setSort } = useFilter();
+  const [searchParams] = useSearchParams();
+  const { filters, setCategory, setSort, setSearchQuery } = useFilter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState("All");
+  const [localSearch, setLocalSearch] = useState("");
+
+  // Handle URL query params for category
+  useEffect(() => {
+    const categoryParam = searchParams.get("category");
+    if (categoryParam && categories.includes(categoryParam)) {
+      setCategory(categoryParam);
+      setActiveCategory(categoryParam);
+    }
+  }, [searchParams, setCategory]);
 
   // Sync local category state with filter context
   useEffect(() => {
@@ -22,12 +34,62 @@ const Shop = () => {
       setActiveCategory("All");
     }
   }, [filters.category]);
+  
+  // Show toast when filters change (triggered by the Clerk)
+  useEffect(() => {
+    if (filters.sortBy === "price") {
+      toast.info(`Products sorted by price: ${filters.sortOrder === "asc" ? "Low to High" : "High to Low"}`);
+    }
+  }, [filters.sortBy, filters.sortOrder]);
+
+  // Sync local search with filter context
+  useEffect(() => {
+    if (filters.searchQuery) {
+      setLocalSearch(filters.searchQuery);
+    }
+  }, [filters.searchQuery]);
 
   // Fetch products based on filters
   useEffect(() => {
     const fetchProducts = async () => {
       setLoading(true);
       try {
+        // If there's a search query, use semantic search
+        if (filters.searchQuery && filters.searchQuery.trim()) {
+          console.log("[Shop] Searching for:", filters.searchQuery);
+          const searchResults = await searchProductsSemantic(filters.searchQuery, 20);
+          
+          // Apply additional filters (category, price) to search results
+          let filteredResults = searchResults;
+          
+          if (filters.category && filters.category !== "All") {
+            filteredResults = filteredResults.filter(p => p.category === filters.category);
+          }
+          if (filters.minPrice !== null) {
+            filteredResults = filteredResults.filter(p => p.price >= filters.minPrice!);
+          }
+          if (filters.maxPrice !== null) {
+            filteredResults = filteredResults.filter(p => p.price <= filters.maxPrice!);
+          }
+          
+          // Apply sorting
+          if (filters.sortBy === "price") {
+            filteredResults.sort((a, b) => 
+              filters.sortOrder === "asc" ? a.price - b.price : b.price - a.price
+            );
+          } else if (filters.sortBy === "name") {
+            filteredResults.sort((a, b) => 
+              filters.sortOrder === "asc" 
+                ? a.name.localeCompare(b.name) 
+                : b.name.localeCompare(a.name)
+            );
+          }
+          
+          setProducts(filteredResults);
+          return;
+        }
+        
+        // Otherwise use regular filtering
         const productFilters: any = {};
         if (filters.category && filters.category !== "All") {
           productFilters.category = filters.category;
@@ -92,9 +154,47 @@ const Shop = () => {
         {/* Header */}
         <div className="mb-10">
           <h1 className="font-display font-bold text-foreground" style={{ fontSize: "clamp(2rem, 4vw, 3.5rem)" }}>
-            Shop All
+            {filters.searchQuery ? `Results for "${filters.searchQuery}"` : "Shop All"}
           </h1>
-          <p className="font-body text-muted-foreground mt-2">Discover our full collection of curated fashion pieces.</p>
+          <p className="font-body text-muted-foreground mt-2">
+            {filters.searchQuery 
+              ? `Found ${products.length} product${products.length !== 1 ? 's' : ''}`
+              : "Discover our full collection of curated fashion pieces."}
+          </p>
+          
+          {/* Search Bar */}
+          <div className="mt-4 flex gap-2 items-center max-w-md">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <input
+                type="text"
+                value={localSearch}
+                onChange={(e) => setLocalSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && localSearch.trim()) {
+                    setSearchQuery(localSearch);
+                    // Track search for recommendations
+                    const keywords = localSearch.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                    addToSearchHistory(localSearch, undefined, keywords);
+                  }
+                }}
+                placeholder="Search products..."
+                className="w-full pl-9 pr-4 py-2 text-sm bg-background border border-border rounded-full focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+            {filters.searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery("");
+                  setLocalSearch("");
+                }}
+                className="p-2 rounded-full hover:bg-secondary transition-colors"
+                title="Clear search"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Filters */}
@@ -127,7 +227,8 @@ const Shop = () => {
 
         {/* Grid */}
         {loading ? (
-          <div className="text-center py-20">
+          <div className="text-center py-20 flex flex-col items-center">
+            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mb-4" />
             <p className="font-body text-muted-foreground">Loading products...</p>
           </div>
         ) : products.length === 0 ? (
