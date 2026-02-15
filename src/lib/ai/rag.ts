@@ -1,283 +1,466 @@
-import { getGeminiModel } from "./gemini-client";
 import { supabase } from "@/lib/supabase";
 import type { Product } from "@/lib/api/products";
 
 /**
- * Generate embedding for text using Gemini
- * Note: Gemini doesn't have a dedicated embeddings API like OpenAI,
- * so we'll use a workaround with the text-embedding model or
- * use Supabase's built-in pgvector with a different embedding service
- * 
- * For now, we'll use a hybrid approach:
- * 1. Use text-based search as primary
- * 2. If embeddings exist in DB, use vector search
+ * Common misspellings and corrections
  */
-export async function generateEmbedding(text: string): Promise<number[]> {
-  // Gemini doesn't have embeddings API directly
-  // We'll need to use a different approach
-  // For hackathon, we can use Supabase's pgvector with OpenAI embeddings
-  // or use text-based semantic search
+const spellCorrections: Record<string, string> = {
+  // Shoes
+  "sneeker": "sneaker", "sneekers": "sneakers", "sneker": "sneaker", "snekers": "sneakers",
+  "shoos": "shoes", "shoez": "shoes", "shos": "shoes",
+  "boot": "boots", "bootz": "boots", "bots": "boots",
+  "loafer": "loafers", "lofer": "loafers", "loafers": "loafers", "lofers": "loafers",
+  "sandle": "sandal", "sandles": "sandals", "sandels": "sandals",
+  "heel": "heels", "heals": "heels", "hels": "heels",
   
-  // Placeholder - in production, you'd call an embedding service
-  // For now, return empty array and use text search
-  return [];
-}
-
-/**
- * Get local products as fallback
- */
-async function getLocalProducts(): Promise<Product[]> {
-  try {
-    const { products } = await import("@/lib/products");
-    // Convert local product format to API format
-    return products.map((p: any) => ({
-      id: String(p.id),
-      name: p.name,
-      price: p.price,
-      image_url: p.image,
-      category: p.category,
-      description: p.description,
-      sizes: p.sizes || [],
-      colors: [],
-      stock: 10,
-      tags: [],
-    }));
-  } catch (error) {
-    console.error("[RAG] Error loading local products:", error);
-    return [];
-  }
-}
-
-/**
- * Semantic matching for seasons, occasions, and styles
- */
-const semanticMappings: { [key: string]: string[] } = {
-  // Seasons -> Products that fit
-  winter: ["overcoat", "sweater", "wool", "knit", "boots", "scarf"],
-  cold: ["overcoat", "sweater", "wool", "knit", "boots", "scarf"],
-  warm: ["linen", "cotton", "sneakers", "tote"],
-  summer: ["linen", "cotton", "sneakers", "tote", "blazer"],
-  spring: ["blazer", "trousers", "sneakers", "tote"],
-  fall: ["overcoat", "boots", "sweater", "jacket", "denim"],
-  autumn: ["overcoat", "boots", "sweater", "jacket", "denim"],
+  // Clothes
+  "blaser": "blazer", "blazr": "blazer", "blzer": "blazer",
+  "sweeter": "sweater", "sweter": "sweater", "sweatter": "sweater",
+  "jackt": "jacket", "jaket": "jacket", "jcket": "jacket",
+  "trouser": "trousers", "trousrs": "trousers", "trowsers": "trousers",
+  "overcoat": "overcoat", "overcot": "overcoat", "ovrecoat": "overcoat",
+  "cardgen": "cardigan", "cardigan": "cardigan", "cardigon": "cardigan",
+  "turtlenck": "turtleneck", "turtleneck": "turtleneck",
+  "dres": "dress", "drss": "dress",
+  "chino": "chinos", "chenos": "chinos",
+  "denim": "denim", "denm": "denim",
   
-  // Occasions
-  casual: ["sneakers", "denim", "tote", "trousers"],
-  formal: ["blazer", "belt", "trousers", "overcoat"],
-  party: ["blazer", "belt", "boots"],
-  office: ["blazer", "trousers", "belt", "crossbody"],
-  date: ["blazer", "boots", "scarf"],
-  outdoor: ["sneakers", "jacket", "tote"],
+  // Bags
+  "tote": "tote", "tot": "tote",
+  "backpak": "backpack", "backpck": "backpack", "bakpack": "backpack",
+  "crossbdy": "crossbody", "crosbody": "crossbody",
+  "duffel": "duffle", "dufel": "duffle",
   
-  // Styles
-  classic: ["sneakers", "blazer", "trousers", "belt", "overcoat"],
-  elegant: ["blazer", "overcoat", "scarf", "boots"],
-  sporty: ["sneakers", "running"],
-  minimalist: ["sneakers", "tote", "belt"],
-  cozy: ["sweater", "knit", "scarf"],
+  // Accessories
+  "belt": "belt", "blt": "belt",
+  "scraf": "scarf", "scrf": "scarf",
+  "sunglass": "sunglasses", "sungalsses": "sunglasses", "sunglases": "sunglasses",
+  "wach": "watch", "wtch": "watch", "wtach": "watch",
   
-  // Categories (direct mappings)
-  shoe: ["sneakers", "boots"],
-  shoes: ["sneakers", "boots"],
-  footwear: ["sneakers", "boots"],
-  bag: ["tote", "crossbody"],
-  bags: ["tote", "crossbody"],
-  clothing: ["blazer", "trousers", "overcoat", "sweater", "jacket"],
-  clothes: ["blazer", "trousers", "overcoat", "sweater", "jacket"],
-  outfit: ["blazer", "trousers", "sneakers", "belt"],
-  item: [], // Return all products
-  items: [], // Return all products
+  // Colors
+  "wite": "white", "whte": "white",
+  "blak": "black", "blck": "black",
+  "blu": "blue", "bleu": "blue",
+  "gry": "gray", "grey": "gray",
+  "brwn": "brown", "bown": "brown",
+  "rd": "red", "redd": "red",
+  "grn": "green", "gren": "green",
+  "pnk": "pink", "pnik": "pink",
+  "beig": "beige", "bege": "beige",
+  "nvy": "navy", "navey": "navy",
 };
 
 /**
- * Search local products by query with semantic understanding
+ * Color keywords for filtering
  */
-async function searchLocalProducts(query: string, limit: number): Promise<Product[]> {
-  const localProducts = await getLocalProducts();
-  const lowerQuery = query.toLowerCase();
-  
-  // Extract keywords from query
-  const keywords = lowerQuery
-    .split(/\s+/)
-    .filter((w) => w.length > 2)
-    .map((w) => w.replace(/[^a-z0-9]/g, ""));
+const colorKeywords = [
+  "white", "black", "blue", "navy", "red", "green", "brown", "beige", "gray", "grey",
+  "pink", "purple", "orange", "yellow", "cream", "tan", "burgundy", "maroon", "teal",
+  "gold", "silver", "bronze", "camel", "olive", "coral", "mint", "ivory", "charcoal"
+];
 
-  // Collect all matching product keywords from semantic mappings
-  const semanticKeywords: string[] = [];
-  for (const keyword of keywords) {
-    if (semanticMappings[keyword]) {
-      semanticKeywords.push(...semanticMappings[keyword]);
+/**
+ * Correct misspelled words in query
+ */
+function correctSpelling(query: string): string {
+  const words = query.toLowerCase().split(/\s+/);
+  const correctedWords = words.map(word => {
+    // Check direct corrections
+    if (spellCorrections[word]) {
+      return spellCorrections[word];
     }
-  }
-  
-  // If we have semantic keywords, use them for matching
-  if (semanticKeywords.length > 0) {
-    const matches = localProducts.filter((product) => {
-      const searchText = `${product.name} ${product.description}`.toLowerCase();
-      return semanticKeywords.some((k) => searchText.includes(k));
-    });
     
-    if (matches.length > 0) {
-      return matches.slice(0, limit);
+    // Check for close matches (simple edit distance)
+    for (const [misspelled, correct] of Object.entries(spellCorrections)) {
+      if (word.length > 3 && misspelled.length > 3) {
+        // Check if word starts similarly
+        if (word.substring(0, 3) === misspelled.substring(0, 3)) {
+          const distance = levenshteinDistance(word, misspelled);
+          if (distance <= 2) {
+            return correct;
+          }
+        }
+      }
     }
-  }
-
-  // Direct keyword matching in product names and descriptions
-  const directMatches = localProducts.filter((product) => {
-    const searchText = `${product.name} ${product.description} ${product.category}`.toLowerCase();
-    return keywords.some((keyword) => searchText.includes(keyword));
+    
+    return word;
   });
   
-  if (directMatches.length > 0) {
-    return directMatches.slice(0, limit);
-  }
-
-  // Category-based matching
-  const categoryMatches: { [key: string]: string[] } = {
-    shoe: ["Shoes"],
-    shoes: ["Shoes"],
-    sneaker: ["Shoes"],
-    sneakers: ["Shoes"],
-    boot: ["Shoes"],
-    boots: ["Shoes"],
-    chelsea: ["Shoes"],
-    pant: ["Clothes"],
-    pants: ["Clothes"],
-    trouser: ["Clothes"],
-    trousers: ["Clothes"],
-    shirt: ["Clothes"],
-    blazer: ["Clothes"],
-    jacket: ["Clothes"],
-    sweater: ["Clothes"],
-    overcoat: ["Clothes"],
-    coat: ["Clothes"],
-    bag: ["Bags"],
-    bags: ["Bags"],
-    tote: ["Bags"],
-    crossbody: ["Bags"],
-    accessory: ["Accessories"],
-    accessories: ["Accessories"],
-    belt: ["Accessories"],
-    scarf: ["Accessories"],
-  };
-
-  const categoryResults: Product[] = [];
-  for (const [keyword, categories] of Object.entries(categoryMatches)) {
-    if (lowerQuery.includes(keyword)) {
-      const matches = localProducts.filter((p) =>
-        categories.includes(p.category)
-      );
-      categoryResults.push(...matches);
-    }
-  }
-  
-  if (categoryResults.length > 0) {
-    // Remove duplicates
-    const uniqueMatches = Array.from(
-      new Map(categoryResults.map((p) => [p.id, p])).values()
-    );
-    return uniqueMatches.slice(0, limit);
-  }
-  
-  // If user asks for generic "items" or "products", return popular products
-  if (lowerQuery.includes("item") || lowerQuery.includes("product") || lowerQuery.includes("something")) {
-    return localProducts.slice(0, limit);
-  }
-
-  // Last resort - return all products (let user browse)
-  return localProducts.slice(0, limit);
+  return correctedWords.join(" ");
 }
 
 /**
- * Semantic search using RAG (Retrieval-Augmented Generation)
- * This performs vector similarity search on product embeddings
+ * Simple Levenshtein distance for spell checking
+ */
+function levenshteinDistance(a: string, b: string): number {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  
+  const matrix: number[][] = [];
+  
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Extract color from query
+ */
+function extractColor(query: string): string | null {
+  const lowerQuery = query.toLowerCase();
+  for (const color of colorKeywords) {
+    if (lowerQuery.includes(color)) {
+      return color;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract main search keywords (product type)
+ */
+function extractProductKeywords(query: string): string[] {
+  const lowerQuery = query.toLowerCase();
+  const productTypes = [
+    "sneakers", "sneaker", "shoes", "shoe", "boots", "boot", "loafers", "loafer",
+    "sandals", "sandal", "heels", "heel", "flats", "flat", "oxford", "oxfords",
+    "blazer", "jacket", "sweater", "cardigan", "turtleneck", "overcoat", "coat",
+    "trousers", "pants", "chinos", "jeans", "shorts", "dress", "shirt",
+    "tote", "bag", "backpack", "crossbody", "duffle", "purse", "clutch",
+    "belt", "scarf", "watch", "sunglasses", "hat", "cap", "wallet"
+  ];
+  
+  const found: string[] = [];
+  for (const type of productTypes) {
+    if (lowerQuery.includes(type)) {
+      found.push(type);
+    }
+  }
+  
+  return found;
+}
+
+/**
+ * Search result with metadata about the search
+ */
+export interface SearchResult {
+  products: Product[];
+  correctedQuery?: string;
+  extractedColor?: string | null;
+  noMatch: boolean;
+  searchKeyword: string;
+}
+
+/**
+ * Advanced semantic search with spell correction and attribute filtering
  */
 export async function semanticSearch(
   query: string,
   limit: number = 10
 ): Promise<Product[]> {
-  // Try Supabase first if available
-  if (supabase) {
-    try {
-      const results = await textBasedSemanticSearch(query, limit);
-      if (results.length > 0) {
-        return results;
-      }
-    } catch (error) {
-      console.warn("[RAG] Supabase search failed, using local fallback:", error);
-    }
-  }
-
-  // Fallback to local products
-  return searchLocalProducts(query, limit);
+  const result = await advancedSearch(query, limit);
+  return result.products;
 }
 
 /**
- * Text-based semantic search using Gemini to understand intent
- * and then querying Supabase with intelligent filters
+ * Advanced search that returns metadata about the search
  */
-async function textBasedSemanticSearch(
+export async function advancedSearch(
   query: string,
+  limit: number = 10
+): Promise<SearchResult> {
+  // Correct spelling first
+  const correctedQuery = correctSpelling(query);
+  const wasQueryCorrected = correctedQuery !== query.toLowerCase();
+  
+  // Extract color preference
+  const extractedColor = extractColor(correctedQuery);
+  
+  // Extract product keywords for the search
+  const productKeywords = extractProductKeywords(correctedQuery);
+  const searchKeyword = productKeywords[0] || correctedQuery.split(/\s+/).filter(w => w.length > 2)[0] || correctedQuery;
+  
+  // Try Supabase first - this is the primary source
+  if (supabase) {
+    try {
+      const results = await searchSupabaseProducts(correctedQuery, extractedColor, limit);
+      
+      if (results.length > 0) {
+        return {
+          products: results,
+          correctedQuery: wasQueryCorrected ? correctedQuery : undefined,
+          extractedColor,
+          noMatch: false,
+          searchKeyword,
+        };
+      }
+      
+      // If no results with color, try without color filter
+      if (extractedColor) {
+        const resultsNoColor = await searchSupabaseProducts(
+          correctedQuery.replace(extractedColor, "").trim(),
+          null,
+          limit
+        );
+        
+        if (resultsNoColor.length > 0) {
+          return {
+            products: resultsNoColor,
+            correctedQuery: wasQueryCorrected ? correctedQuery : undefined,
+            extractedColor,
+            noMatch: false,
+            searchKeyword,
+          };
+        }
+      }
+    } catch (error) {
+      console.warn("[RAG] Supabase search failed:", error);
+    }
+  }
+  
+  // No results found
+  return {
+    products: [],
+    correctedQuery: wasQueryCorrected ? correctedQuery : undefined,
+    extractedColor,
+    noMatch: true,
+    searchKeyword,
+  };
+}
+
+/**
+ * Search Supabase products with intelligent matching
+ */
+async function searchSupabaseProducts(
+  query: string,
+  colorFilter: string | null,
   limit: number
 ): Promise<Product[]> {
-  // First, try Supabase if available
-  if (supabase) {
-    try {
-      // Simple text search in Supabase first
-      const { data, error } = await supabase
-        .from("products")
-        .select("*")
-        .or(`name.ilike.%${query}%,description.ilike.%${query}%,category.ilike.%${query}%`)
-        .limit(limit);
-
-      if (!error && data && data.length > 0) {
-        return data.map((p: any) => ({
-          ...p,
-          sizes: p.sizes || [],
-          colors: p.colors || [],
-          tags: p.tags || [],
-        }));
-      }
-    } catch (error) {
-      console.warn("[RAG] Supabase search failed, using local products:", error);
+  if (!supabase) return [];
+  
+  const lowerQuery = query.toLowerCase();
+  const keywords = lowerQuery.split(/\s+/).filter(w => w.length > 2 && !colorKeywords.includes(w));
+  
+  try {
+    // Build search conditions
+    const searchTerms = keywords.join(" | ");
+    
+    // First try: exact name/tag matching
+    let queryBuilder = supabase
+      .from("products")
+      .select("*");
+    
+    // Build OR conditions for each keyword
+    const orConditions: string[] = [];
+    for (const keyword of keywords) {
+      orConditions.push(`name.ilike.%${keyword}%`);
+      orConditions.push(`description.ilike.%${keyword}%`);
+      orConditions.push(`tags.cs.["${keyword}"]`);
     }
+    
+    if (orConditions.length > 0) {
+      queryBuilder = queryBuilder.or(orConditions.join(","));
+    }
+    
+    const { data, error } = await queryBuilder.limit(limit * 2);
+    
+    if (error) {
+      console.warn("[RAG] Supabase query error:", error);
+      return [];
+    }
+    
+    if (!data || data.length === 0) {
+      // Try category-based search
+      const categoryMap: Record<string, string> = {
+        "shoe": "Shoes", "shoes": "Shoes", "sneaker": "Shoes", "sneakers": "Shoes",
+        "boot": "Shoes", "boots": "Shoes", "loafer": "Shoes", "loafers": "Shoes",
+        "sandal": "Shoes", "sandals": "Shoes", "heel": "Shoes", "heels": "Shoes",
+        "clothes": "Clothes", "clothing": "Clothes", "blazer": "Clothes", "jacket": "Clothes",
+        "sweater": "Clothes", "cardigan": "Clothes", "turtleneck": "Clothes",
+        "overcoat": "Clothes", "coat": "Clothes", "trousers": "Clothes", "pants": "Clothes",
+        "chinos": "Clothes", "dress": "Clothes", "shirt": "Clothes",
+        "bag": "Bags", "bags": "Bags", "tote": "Bags", "backpack": "Bags",
+        "crossbody": "Bags", "duffle": "Bags",
+        "accessory": "Accessories", "accessories": "Accessories", "belt": "Accessories",
+        "scarf": "Accessories", "watch": "Accessories", "sunglasses": "Accessories",
+      };
+      
+      let categoryToSearch: string | null = null;
+      for (const keyword of keywords) {
+        if (categoryMap[keyword]) {
+          categoryToSearch = categoryMap[keyword];
+          break;
+        }
+      }
+      
+      if (categoryToSearch) {
+        const { data: catData } = await supabase
+          .from("products")
+          .select("*")
+          .eq("category", categoryToSearch)
+          .limit(limit);
+        
+        if (catData && catData.length > 0) {
+          return filterAndFormatProducts(catData, colorFilter, limit);
+        }
+      }
+      
+      return [];
+    }
+    
+    return filterAndFormatProducts(data, colorFilter, limit);
+  } catch (error) {
+    console.warn("[RAG] Search error:", error);
+    return [];
   }
-
-  // Always fallback to local products (works without Supabase or Gemini)
-  return await searchLocalProducts(query, limit);
 }
 
 /**
- * Generate embedding for a product and store it in the database
- * This should be run during product migration
+ * Filter products by color and format them
  */
-export async function generateAndStoreEmbedding(
-  productId: string,
-  textContent: string
-): Promise<boolean> {
-  if (!supabase) {
-    return false;
-  }
-
-  try {
-    // For now, we'll store the text content
-    // In production, you'd generate actual embeddings using an embedding service
-    // and store them as vectors in pgvector
-    
-    const { error } = await supabase.from("product_embeddings").upsert({
-      product_id: productId,
-      text_content: textContent,
-      // embedding: embeddingVector, // Would be a vector type in pgvector
-    });
-
-    if (error) {
-      console.error("[RAG] Error storing embedding:", error);
+function filterAndFormatProducts(
+  data: any[],
+  colorFilter: string | null,
+  limit: number
+): Product[] {
+  let products = data;
+  
+  // Filter by color if specified
+  if (colorFilter) {
+    const colorFiltered = products.filter(p => {
+      // Check colors array
+      const colors = p.colors || [];
+      if (colors.some((c: string) => c.toLowerCase().includes(colorFilter))) {
+        return true;
+      }
+      
+      // Check description for color mentions
+      const desc = (p.description || "").toLowerCase();
+      if (desc.includes(colorFilter)) {
+        return true;
+      }
+      
+      // Check name
+      const name = (p.name || "").toLowerCase();
+      if (name.includes(colorFilter)) {
+        return true;
+      }
+      
+      // Check tags
+      const tags = p.tags || [];
+      if (tags.some((t: string) => t.toLowerCase().includes(colorFilter))) {
+        return true;
+      }
+      
       return false;
+    });
+    
+    // If we found color-matching products, use those
+    if (colorFiltered.length > 0) {
+      products = colorFiltered;
     }
+    // Otherwise, we'll return all products but the caller knows color was requested
+  }
+  
+  return products.slice(0, limit).map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    image_url: p.image_url,
+    category: p.category,
+    description: p.description,
+    sizes: p.sizes || [],
+    colors: p.colors || [],
+    stock: p.stock || 10,
+    tags: p.tags || [],
+    metadata: p.metadata || {},
+  }));
+}
 
-    return true;
+/**
+ * Get all products from Supabase (for recommendations fallback)
+ */
+export async function getAllProducts(limit: number = 10): Promise<Product[]> {
+  if (!supabase) return [];
+  
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    
+    if (error || !data) return [];
+    
+    return data.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      price: p.price,
+      image_url: p.image_url,
+      category: p.category,
+      description: p.description,
+      sizes: p.sizes || [],
+      colors: p.colors || [],
+      stock: p.stock || 10,
+      tags: p.tags || [],
+      metadata: p.metadata || {},
+    }));
   } catch (error) {
-    console.error("[RAG] Error generating embedding:", error);
-    return false;
+    console.warn("[RAG] Error getting all products:", error);
+    return [];
+  }
+}
+
+/**
+ * Get products by category from Supabase
+ */
+export async function getProductsByCategory(category: string, limit: number = 10): Promise<Product[]> {
+  if (!supabase) return [];
+  
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("category", category)
+      .limit(limit);
+    
+    if (error || !data) return [];
+    
+    return data.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      price: p.price,
+      image_url: p.image_url,
+      category: p.category,
+      description: p.description,
+      sizes: p.sizes || [],
+      colors: p.colors || [],
+      stock: p.stock || 10,
+      tags: p.tags || [],
+      metadata: p.metadata || {},
+    }));
+  } catch (error) {
+    console.warn("[RAG] Error getting products by category:", error);
+    return [];
   }
 }

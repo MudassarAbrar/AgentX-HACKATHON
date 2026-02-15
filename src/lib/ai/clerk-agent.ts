@@ -1,11 +1,5 @@
-import { getGeminiModel } from "./gemini-client";
-import {
-  searchProductsSemantic,
-  getProducts,
-  getProductById,
-  checkInventory,
-  getRecommendedProducts,
-} from "@/lib/api/products";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { getProducts } from "@/lib/api/products";
 import { addToCart } from "@/lib/api/cart";
 import { supabase } from "@/lib/supabase";
 import type { Product } from "@/lib/api/products";
@@ -28,1045 +22,707 @@ export interface ClerkResponse {
   action?: ClerkAction;
 }
 
-const SYSTEM_PROMPT = `You are The Clerk, a friendly AI personal shopper for TrendZone.
+// Store inventory cache (refreshed periodically)
+let productCache: Product[] = [];
+let cacheTimestamp = 0;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-CRITICAL RULES:
-1. NEVER make up products, URLs, prices, or product names
-2. ONLY discuss products that exist in the inventory provided to you
-3. If you don't know about a product, say "Let me search our inventory for you"
-4. Keep responses SHORT and focused - no long descriptions
-5. When users want to buy, ask for size/color preferences before adding to cart
-6. NEVER generate fake URLs or links
-
-Your capabilities:
-- Search real products from inventory
-- Check availability and sizes
-- Add items to cart (ask for size first)
-- Apply discounts for special occasions
-- Sort/filter products on the shop page
-
-Keep responses concise and helpful.`;
-
-// Conversation context to maintain memory
-interface ConversationContext {
-  lastSearchQuery: string | null;
-  lastCategory: string | null;
-  lastMentionedProducts: string[]; // Product names
-  userPreferences: {
-    categories?: string[];
-    priceRange?: { min?: number; max?: number };
-    styles?: string[];
-  };
-  topicHistory: string[]; // Last few topics discussed
+async function getInventory(): Promise<Product[]> {
+  const now = Date.now();
+  if (productCache.length > 0 && now - cacheTimestamp < CACHE_DURATION) {
+    return productCache;
+  }
+  
+  try {
+    const products = await getProducts({}, { field: "created_at", order: "desc" });
+    if (products.length > 0) {
+      productCache = products;
+      cacheTimestamp = now;
+    }
+    return productCache;
+  } catch (error) {
+    console.warn("[Clerk] Failed to fetch inventory:", error);
+    return productCache;
+  }
 }
 
+function formatInventoryForAI(products: Product[]): string {
+  return products.map((p, i) => 
+    `${i + 1}. "${p.name}" | $${p.price} | Category: ${p.category} | Sizes: ${p.sizes.join(", ")} | Stock: ${p.stock > 0 ? "In Stock" : "Out of Stock"} | ID: ${p.id}`
+  ).join("\n");
+}
+
+// Function declarations for Gemini (using inline types)
+const functionDeclarations = [
+  {
+    name: "search_products",
+    description: "Search for products in the store inventory based on user's needs. Use this when user asks to see products, find items, or browse categories.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        query: {
+          type: "STRING" as const,
+          description: "Search terms - product type, category, style, occasion, etc."
+        },
+        category: {
+          type: "STRING" as const,
+          description: "Filter by category: Shoes, Clothes, Bags, or Accessories",
+          enum: ["Shoes", "Clothes", "Bags", "Accessories"]
+        },
+        max_price: {
+          type: "NUMBER" as const,
+          description: "Maximum price filter"
+        },
+        sort_by: {
+          type: "STRING" as const,
+          description: "Sort order for results",
+          enum: ["price_low", "price_high", "newest"]
+        }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "add_to_cart",
+    description: "Add a product to the user's shopping cart. Only use when user explicitly wants to buy/add a specific product AND has confirmed the size.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        product_id: {
+          type: "STRING" as const,
+          description: "The product ID to add"
+        },
+        product_name: {
+          type: "STRING" as const,
+          description: "The product name for confirmation"
+        },
+        size: {
+          type: "STRING" as const,
+          description: "The size selected by the user"
+        },
+        quantity: {
+          type: "NUMBER" as const,
+          description: "Quantity to add (default 1)"
+        }
+      },
+      required: ["product_id", "product_name", "size"]
+    }
+  },
+  {
+    name: "apply_filter",
+    description: "Update the shop page display - sort products or filter by category. Use when user wants to see cheaper/expensive options or browse a category.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        filter_type: {
+          type: "STRING" as const,
+          description: "Type of filter to apply",
+          enum: ["sort_price_low", "sort_price_high", "filter_category"]
+        },
+        category: {
+          type: "STRING" as const,
+          description: "Category to filter by (only if filter_type is filter_category)"
+        }
+      },
+      required: ["filter_type"]
+    }
+  },
+  {
+    name: "generate_discount",
+    description: "Generate a discount coupon for the user. Only use when user gives a valid reason like birthday, wedding, student, first purchase, or bulk order.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        reason: {
+          type: "STRING" as const,
+          description: "The reason for the discount",
+          enum: ["birthday", "wedding", "student", "first_purchase", "bulk_order", "valentines", "loyal_customer"]
+        },
+        discount_percent: {
+          type: "NUMBER" as const,
+          description: "Discount percentage (5-20)"
+        }
+      },
+      required: ["reason", "discount_percent"]
+    }
+  },
+  {
+    name: "check_inventory",
+    description: "Check if a specific product is available in a specific size/color.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        product_name: {
+          type: "STRING" as const,
+          description: "Name of the product to check"
+        },
+        size: {
+          type: "STRING" as const,
+          description: "Size to check availability for"
+        }
+      },
+      required: ["product_name"]
+    }
+  }
+];
+
 export class ClerkAgent {
+  private apiKey: string | null;
+  private genAI: GoogleGenerativeAI | null;
   private model: any;
-  private conversationHistory: ClerkMessage[] = [];
-  private pendingAddToCart: Product | null = null; // Track product waiting for size selection
-  private lastShownProducts: Product[] = []; // Track last shown products for context
-  private context: ConversationContext = {
-    lastSearchQuery: null,
-    lastCategory: null,
-    lastMentionedProducts: [],
-    userPreferences: {},
-    topicHistory: [],
-  };
+  private chatSession: any;
+  private inventory: Product[] = [];
+  private lastShownProducts: Product[] = [];
+  private isInitialized: boolean = false;
 
   constructor() {
-    this.model = getGeminiModel("gemini-2.5-flash");
-    this.conversationHistory.push({
-      role: "system",
-      content: SYSTEM_PROMPT,
-    });
+    this.apiKey = import.meta.env.VITE_GEMINI_API_KEY || null;
+    
+    if (this.apiKey) {
+      this.genAI = new GoogleGenerativeAI(this.apiKey);
+    } else {
+      this.genAI = null;
+      this.model = null;
+      console.warn("[Clerk] No API key - AI features disabled");
+    }
   }
 
-  /**
-   * Process user message and return response with potential actions
-   */
-  async chat(userMessage: string, sessionId: string): Promise<ClerkResponse> {
-    if (!this.model) {
-      return {
-        message:
-          "I'm sorry, but I'm not available right now. Please configure your Gemini API key in the .env file to enable AI features. For now, you can still browse and shop manually!",
-      };
+  private async ensureInitialized(): Promise<boolean> {
+    if (this.isInitialized && this.model && this.chatSession) {
+      return true;
     }
+    
+    if (!this.genAI) return false;
+    
+    try {
+      // Load inventory for context
+      this.inventory = await getInventory();
+      
+      if (this.inventory.length === 0) {
+        console.warn("[Clerk] No inventory loaded");
+      }
+      
+      const systemInstruction = this.buildSystemPrompt();
+      
+      this.model = this.genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        systemInstruction,
+        tools: [{ functionDeclarations }] as any,
+      });
+      
+      // Start a chat session
+      this.chatSession = this.model.startChat({
+        history: [],
+      });
+      
+      this.isInitialized = true;
+      console.log("[Clerk] AI Model initialized with", this.inventory.length, "products");
+      return true;
+    } catch (error) {
+      console.error("[Clerk] Failed to initialize model:", error);
+      this.model = null;
+      return false;
+    }
+  }
 
-    // Add user message to history
-    this.conversationHistory.push({
-      role: "user",
-      content: userMessage,
-    });
+  private buildSystemPrompt(): string {
+    const inventoryList = formatInventoryForAI(this.inventory);
+    
+    return `You are "The Clerk" - a friendly, knowledgeable personal shopper at TrendZone, a modern fashion store. You're not a robot - you're like a helpful friend who works at a cool clothing store.
+
+## YOUR PERSONALITY
+- Warm, friendly, and conversational (not formal or robotic)
+- Enthusiastic about fashion but not pushy
+- Helpful and patient, like a real store clerk
+- Use natural language, occasional emojis, and be personable
+- Remember context from the conversation
+
+## CURRENT STORE INVENTORY (${this.inventory.length} products)
+${inventoryList}
+
+## YOUR CAPABILITIES (use function calls)
+1. **search_products** - Help customers find products based on their needs, style, occasion
+2. **add_to_cart** - When they decide to buy, help them choose size and add to cart
+3. **generate_discount** - For valid reasons (birthday, wedding, student, bulk), offer 10-20% off
+4. **apply_filter** - Sort by price or filter by category when asked
+5. **check_inventory** - Check if specific product/size is available
+
+## IMPORTANT RULES
+1. ONLY recommend products from the inventory above - never make up products
+2. When showing products, mention their actual name, price, and key features
+3. Before adding to cart, ALWAYS confirm the SIZE with the customer
+4. For discounts, only valid reasons get codes: birthday (15%), wedding (20%), student (10%), first order (10%), bulk (12%)
+5. Be conversational! Don't just list products - engage naturally
+6. If asked about something not in inventory, suggest alternatives we DO have
+7. **CRITICAL: ALWAYS call search_products or apply_filter when user asks for products, even if asking follow-up questions**
+8. When user asks for a specific item (sunglasses, shoes, etc.) - ALWAYS call search_products to show them
+9. When user mentions an occasion (birthday, wedding) - call search_products to show relevant outfit ideas AND generate_discount if appropriate
+10. Don't just ask questions without showing products - be proactive and show relevant items
+
+## RESPONSE FORMAT
+- Keep responses concise but friendly (2-4 sentences usually)
+- When showing products, describe them naturally, don't just list
+- ALWAYS call the appropriate function to execute actions
+- After showing products, ask follow-up questions to help them decide
+
+## EXAMPLES OF GOOD RESPONSES
+- User: "I want shoes" → Call search_products with query:"shoes", then describe the options naturally
+- User: "It's my birthday" → Call BOTH generate_discount AND search_products to show birthday outfit ideas
+- User: "can you provide sunglasses" → Call search_products with query:"sunglasses" to show sunglasses options
+- User: "suggest me something for birthday" → Call search_products for outfit ideas AND generate_discount
+- User: "Add the blazer in size M" → Call add_to_cart with the product details
+- User: "Show me cheaper options" → Call apply_filter with filter_type:"sort_price_low"
+- User: "today's my friend wedding" → Call search_products for wedding outfit ideas (formal clothes, accessories)
+
+## BAD RESPONSES (AVOID THESE)
+- NEVER just ask questions without showing products
+- NEVER say "Let me show you" without actually calling search_products
+- NEVER respond without a function call if user is asking for products`;
+  }
+
+  async chat(userMessage: string, sessionId: string): Promise<ClerkResponse> {
+    // Ensure model is initialized
+    const initialized = await this.ensureInitialized();
+    
+    // Refresh inventory
+    this.inventory = await getInventory();
+    
+    // If not initialized, use fallback
+    if (!initialized || !this.chatSession) {
+      console.warn("[Clerk] Using fallback response - not initialized");
+      return this.fallbackResponse(userMessage);
+    }
 
     try {
-      // Analyze the message to determine intent
-      const intent = await this.analyzeIntent(userMessage);
-      console.log("[Clerk Agent] Intent detected:", intent.type, intent);
-
-      // Handle different intents
-      let response: ClerkResponse;
-
-      switch (intent.type) {
-        case "size_response":
-          // User responded with a size after we asked
-          response = await this.handleSizeResponse(intent.size, sessionId);
-          break;
-        case "search":
-          response = await this.handleSearch(intent.query, sessionId, intent.hasBirthday || intent.hasWedding);
-          break;
-        case "birthday_recommendations":
-          const recResponse = await this.handleRecommendations(sessionId);
-          const haggleResponse = await this.handleHaggle(userMessage, sessionId);
-          response = {
-            message: `${recResponse.message}\n\n${haggleResponse.message}`,
-            products: recResponse.products,
-            action: haggleResponse.action,
-          };
-          break;
-        case "inventory_check":
-          response = await this.handleInventoryCheck(
-            intent.productName,
-            intent.size,
-            intent.color
-          );
-          break;
-        case "recommendations":
-          response = await this.handleRecommendations(sessionId);
-          break;
-        case "filter":
-          response = await this.handleFilter(intent.filterType, intent.value);
-          break;
-        case "add_to_cart":
-          response = await this.handleAddToCartFromMessage(userMessage, sessionId);
-          break;
-        case "haggle":
-          response = await this.handleHaggle(userMessage, sessionId);
-          break;
-        default:
-          response = await this.handleGeneralChat(userMessage);
+      // Send message to Gemini
+      const result = await this.chatSession.sendMessage(userMessage);
+      const response = result.response;
+      
+      // Check for function calls
+      const functionCalls = response.functionCalls();
+      
+      if (functionCalls && functionCalls.length > 0) {
+        return await this.handleFunctionCalls(functionCalls, response.text(), sessionId);
       }
-
-      // Track last shown products for context
-      if (response.products && response.products.length > 0) {
-        this.lastShownProducts = response.products;
-      }
-
-      // Add assistant response to history
-      this.conversationHistory.push({
-        role: "assistant",
-        content: response.message,
-        products: response.products,
-        action: response.action,
-      });
-
-      return response;
-    } catch (error) {
-      console.error("[Clerk Agent] Error processing message:", error);
+      
+      // No function call - just a text response (conversation/follow-up question)
+      const text = response.text();
+      
+      // Don't show products for conversational responses (follow-up questions, clarifications)
+      // Only show products when we explicitly searched for them via function calls
       return {
-        message:
-          "I apologize, but I encountered an error. Could you please rephrase your question?",
+        message: text || "I'm here to help! What are you looking for today?",
+        // Don't carry over old products - this was causing wrong products to show
+        // Products should only be returned when Gemini calls search_products function
       };
-    }
-  }
-
-  /**
-   * Analyze user intent from message - uses conversation context
-   */
-  private async analyzeIntent(message: string): Promise<any> {
-    const lowerMessage = message.toLowerCase().trim();
-
-    // PRIORITY 0: Check if user is responding to a size question
-    // This must be checked FIRST - when we asked for size and user responds
-    if (this.pendingAddToCart) {
-      // Check if the message looks like a size response
-      const sizePatterns = [
-        /^size\s*:?\s*(\w+)$/i,           // "size M", "size: M"
-        /^(\d{2})$/,                        // "42" (shoe size)
-        /^(xs|s|m|l|xl|xxl|small|medium|large)$/i, // Just the size
-        /^(3[6-9]|4[0-9])$/,               // Shoe sizes 36-49
-      ];
       
-      for (const pattern of sizePatterns) {
-        if (pattern.test(lowerMessage)) {
-          return { type: "size_response", size: lowerMessage };
-        }
-      }
+    } catch (error: any) {
+      console.error("[Clerk] Chat error:", error);
       
-      // Also check for "size X" pattern anywhere in message
-      const sizeMatch = lowerMessage.match(/size\s*:?\s*(\w+)/i);
-      if (sizeMatch) {
-        return { type: "size_response", size: sizeMatch[1] };
-      }
-    }
-
-    // PRIORITY 1: "add it to cart" or "add it" - user wants to add last shown product
-    // Use context to understand what "it" refers to
-    if (
-      lowerMessage === "add it" ||
-      lowerMessage === "add it to cart" ||
-      lowerMessage === "add to cart" ||
-      lowerMessage === "buy it" ||
-      lowerMessage === "get it" ||
-      lowerMessage === "i'll take it" ||
-      lowerMessage === "yes add it" ||
-      lowerMessage === "yes" ||
-      lowerMessage === "ok" ||
-      lowerMessage === "sure"
-    ) {
-      // If we have last shown products, add the first one
-      if (this.lastShownProducts.length > 0 || this.pendingAddToCart) {
-        return { type: "add_to_cart", query: message };
-      }
-    }
-    
-    // PRIORITY 1.5: Check for referential language using context
-    // "the first one", "that one", "the blazer" (if we just showed blazer)
-    if (this.context.lastMentionedProducts.length > 0) {
-      const ordinalPatterns = [
-        { pattern: /(?:the\s+)?first\s*(?:one)?/i, index: 0 },
-        { pattern: /(?:the\s+)?second\s*(?:one)?/i, index: 1 },
-        { pattern: /(?:the\s+)?third\s*(?:one)?/i, index: 2 },
-        { pattern: /(?:the\s+)?last\s*(?:one)?/i, index: -1 },
-      ];
+      // Reset session on error
+      this.isInitialized = false;
       
-      for (const { pattern, index } of ordinalPatterns) {
-        if (pattern.test(lowerMessage) && (lowerMessage.includes("add") || lowerMessage.includes("buy") || lowerMessage.includes("get"))) {
-          const productIndex = index === -1 ? this.lastShownProducts.length - 1 : index;
-          if (productIndex < this.lastShownProducts.length) {
-            return { type: "add_to_cart", query: message, productIndex };
-          }
-        }
-      }
-      
-      // Check if user mentions a product name from context
-      for (const productName of this.context.lastMentionedProducts) {
-        const nameWords = productName.toLowerCase().split(/\s+/);
-        for (const word of nameWords) {
-          if (word.length > 3 && lowerMessage.includes(word)) {
-            if (lowerMessage.includes("add") || lowerMessage.includes("buy") || lowerMessage.includes("get") || lowerMessage.includes("cart")) {
-              return { type: "add_to_cart", query: message };
-            }
-            // If just mentioning a product, might want more info
-            if (lowerMessage.includes("more") || lowerMessage.includes("tell") || lowerMessage.includes("about")) {
-              return { type: "search", query: productName };
-            }
-          }
-        }
-      }
-    }
-
-    // Check for birthday/haggle
-    const hasBirthday = lowerMessage.includes("birthday") || lowerMessage.includes("birth day");
-    const hasWedding = lowerMessage.includes("wedding") || lowerMessage.includes("marry");
-    const hasHaggleKeywords = lowerMessage.includes("discount") || 
-                              lowerMessage.includes("deal") || 
-                              lowerMessage.includes("provide discount") ||
-                              lowerMessage.includes("give discount") ||
-                              lowerMessage.includes("give me discount") ||
-                              lowerMessage.includes("can i get") ||
-                              lowerMessage.includes("can you give");
-    
-    // PRIORITY 2: Add to cart with product name
-    const strongAddKeywords = 
-      lowerMessage.includes("book it") ||
-      lowerMessage.includes("book this") ||
-      lowerMessage.includes("buy it") ||
-      lowerMessage.includes("buy this") ||
-      lowerMessage.includes("add to cart") ||
-      lowerMessage.includes("add it to cart") ||
-      lowerMessage.includes("add to my cart") ||
-      lowerMessage.includes("i'll take") ||
-      lowerMessage.includes("i will take") ||
-      lowerMessage.includes("get me") ||
-      lowerMessage.includes("purchase") ||
-      lowerMessage.includes("order") ||
-      lowerMessage.includes("add the") ||
-      lowerMessage.includes("add this") ||
-      lowerMessage.includes("can you add");
-    
-    // Check for product names in message
-    const productNamesLower = ["blazer", "sneaker", "boot", "shoe", "pant", "shirt", "jacket", "bag", "belt", "scarf", "sweater", "trouser", "tote", "overcoat", "linen", "wool", "denim", "knit", "canvas", "leather", "classic sneakers", "chelsea boots", "running sneakers", "relaxed trousers", "linen blazer", "canvas tote", "wool overcoat", "leather belt", "knit sweater", "denim jacket", "silk scarf", "crossbody"];
-    const hasProductName = productNamesLower.some(word => lowerMessage.includes(word));
-    
-    if (strongAddKeywords) {
-      return { type: "add_to_cart", query: message };
-    }
-    
-    // "buy" or "add" with product name
-    if ((lowerMessage.includes("add") || lowerMessage.includes("buy") || lowerMessage.includes("get")) && hasProductName) {
-      return { type: "add_to_cart", query: message };
-    }
-
-    // PRIORITY 3: Haggle/Discount
-    if ((hasBirthday || hasWedding) && hasHaggleKeywords) {
-      return { type: "haggle", query: message };
-    }
-    
-    if (hasBirthday || hasWedding) {
-      const hasSearchContext = lowerMessage.includes("looking for") || 
-                               lowerMessage.includes("show me") ||
-                               lowerMessage.includes("find");
-      if (!hasSearchContext) {
-        return { type: "haggle", query: message };
-      }
-    }
-    
-    if (hasHaggleKeywords) {
-      return { type: "haggle", query: message };
-    }
-
-    // PRIORITY 4: Filter/Sort
-    if (
-      lowerMessage.includes("sort") ||
-      lowerMessage.includes("filter") ||
-      lowerMessage.includes("cheaper") ||
-      lowerMessage.includes("cheap") ||
-      lowerMessage.includes("affordable") ||
-      lowerMessage.includes("low price") ||
-      lowerMessage.includes("lowest") ||
-      lowerMessage.includes("expensive") ||
-      lowerMessage.includes("high price") ||
-      lowerMessage.includes("highest")
-    ) {
-      if (lowerMessage.includes("expensive") || lowerMessage.includes("high price") || lowerMessage.includes("highest")) {
-        return { type: "filter", filterType: "sort_by_price", value: "desc" };
-      }
-      return { type: "filter", filterType: "sort_by_price", value: "asc" };
-    }
-
-    // PRIORITY 5: Search intent
-    const hasSearchKeywords = (
-      lowerMessage.includes("find") ||
-      lowerMessage.includes("search") ||
-      lowerMessage.includes("looking for") ||
-      lowerMessage.includes("show me") ||
-      lowerMessage.includes("show") ||
-      lowerMessage.includes("want to see") ||
-      lowerMessage.includes("want") ||
-      lowerMessage.includes("need") ||
-      lowerMessage.includes("can you show") ||
-      lowerMessage.includes("do you have") ||
-      lowerMessage.includes("what") ||
-      lowerMessage.includes("any")
-    );
-    
-    // Search keywords for seasons, occasions, styles
-    const searchContextWords = ["winter", "summer", "spring", "fall", "autumn", "casual", "formal", "party", "office", "work", "date", "wedding", "outfit", "items", "clothes", "clothing", "wear", "fashion"];
-    const hasSearchContext = searchContextWords.some(word => lowerMessage.includes(word));
-
-    if (hasSearchKeywords || hasSearchContext || hasProductName) {
-      return { type: "search", query: message, hasBirthday, hasWedding };
-    }
-
-    // Inventory check
-    if (lowerMessage.includes("available") || lowerMessage.includes("in stock")) {
-      return { type: "inventory_check", productName: message };
-    }
-
-    // Recommendations
-    if (lowerMessage.includes("recommend") || lowerMessage.includes("suggest")) {
-      return { type: "recommendations" };
-    }
-
-    return { type: "general" };
-  }
-
-  /**
-   * Handle product search - also updates the UI
-   */
-  private async handleSearch(
-    query: string,
-    sessionId: string,
-    hasBirthday?: boolean
-  ): Promise<ClerkResponse> {
-    const lowerQuery = query.toLowerCase();
-    
-    // Update context
-    this.context.lastSearchQuery = query;
-    this.context.topicHistory.push(`searched for: ${query}`);
-    if (this.context.topicHistory.length > 5) {
-      this.context.topicHistory.shift();
-    }
-    
-    // Detect if user is searching for a specific category
-    const categoryMap: Record<string, string> = {
-      "shoes": "Shoes",
-      "shoe": "Shoes",
-      "footwear": "Shoes",
-      "sneakers": "Shoes",
-      "sneaker": "Shoes",
-      "boots": "Shoes",
-      "boot": "Shoes",
-      "clothes": "Clothes",
-      "clothing": "Clothes",
-      "blazer": "Clothes",
-      "jacket": "Clothes",
-      "sweater": "Clothes",
-      "trousers": "Clothes",
-      "pants": "Clothes",
-      "overcoat": "Clothes",
-      "coat": "Clothes",
-      "bags": "Bags",
-      "bag": "Bags",
-      "tote": "Bags",
-      "accessories": "Accessories",
-      "accessory": "Accessories",
-      "belt": "Accessories",
-      "scarf": "Accessories",
-    };
-    
-    let detectedCategory: string | null = null;
-    for (const [keyword, category] of Object.entries(categoryMap)) {
-      if (lowerQuery.includes(keyword)) {
-        detectedCategory = category;
-        this.context.lastCategory = category;
-        break;
-      }
-    }
-    
-    const products = await searchProductsSemantic(query, 6);
-
-    if (products.length === 0) {
-      // Try a more flexible search
-      const flexibleQuery = query
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, "")
-        .split(/\s+/)
-        .filter((w) => w.length > 2)
-        .join(" ");
-
-      const retryProducts = await searchProductsSemantic(flexibleQuery, 6);
-
-      if (retryProducts.length === 0) {
+      // If it's a rate limit or API error, use fallback
+      if (error.message?.includes("429") || error.message?.includes("quota")) {
         return {
-          message: `I couldn't find products matching "${query}". Let me show you some recommendations instead!`,
-          products: await this.handleRecommendations(sessionId).then(r => r.products || []),
+          message: "I'm a bit busy right now! Let me show you some of our popular items while things calm down.",
+          products: this.inventory.slice(0, 4),
         };
       }
-
-      return this.formatSearchResponse(retryProducts, query, sessionId, hasBirthday, detectedCategory);
+      
+      return this.fallbackResponse(userMessage);
     }
-
-    return this.formatSearchResponse(products, query, sessionId, hasBirthday, detectedCategory);
   }
 
-  /**
-   * Format search response with products
-   */
-  private async formatSearchResponse(
-    products: Product[],
-    query: string,
-    sessionId: string,
-    hasSpecialOccasion?: boolean,
-    detectedCategory?: string | null
-  ): Promise<ClerkResponse> {
-    // Update context with mentioned products
-    this.context.lastMentionedProducts = products.map(p => p.name);
+  private async handleFunctionCalls(functionCalls: any[], textResponse: string, sessionId: string): Promise<ClerkResponse> {
+    let products: Product[] = [];
+    let action: ClerkAction | undefined;
+    let message = textResponse || "";
     
-    // Log search activity (silently fail if table doesn't exist or schema mismatch)
-    if (supabase) {
-      for (const product of products) {
-        try {
-          // Only log if product_id is a valid UUID format
-          const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(product.id);
+    for (const call of functionCalls) {
+      const { name, args } = call;
+      
+      switch (name) {
+        case "search_products": {
+          const searchResults = await this.executeSearch(args);
+          products = searchResults;
+          this.lastShownProducts = searchResults;
           
-          if (isValidUUID) {
-            const { error } = await supabase.from("user_activity").insert({
-              session_id: sessionId,
-              activity_type: "view",
-              product_id: product.id,
-              metadata: { search_query: query },
-            });
-            if (error) {
-              // Silently ignore - activity logging is not critical
-              console.debug("[Clerk Agent] Activity logging skipped:", error.message);
-            }
+          if (args.category) {
+            action = {
+              type: "filter",
+              payload: { filterType: "filter_by_category", value: args.category }
+            };
           }
-        } catch (error) {
-          // Silently ignore errors - activity logging is not critical
-          console.debug("[Clerk Agent] Activity logging skipped");
+          break;
+        }
+        
+        case "add_to_cart": {
+          const cartResult = await this.executeAddToCart(args, sessionId);
+          if (cartResult.success) {
+            products = cartResult.product ? [cartResult.product] : [];
+            action = {
+              type: "add_to_cart",
+              payload: {
+                productId: args.product_id,
+                size: args.size,
+                quantity: args.quantity || 1
+              }
+            };
+            if (cartResult.message) message = cartResult.message;
+          } else {
+            message = cartResult.message;
+          }
+          break;
+        }
+        
+        case "apply_filter": {
+          const filterResult = await this.executeFilter(args);
+          products = filterResult.products;
+          this.lastShownProducts = filterResult.products;
+          action = filterResult.action;
+          break;
+        }
+        
+        case "generate_discount": {
+          const discountResult = await this.executeDiscount(args, sessionId);
+          message = discountResult.message;
+          if (discountResult.couponCode) {
+            action = {
+              type: "filter",
+              payload: {
+                action: "apply_coupon",
+                couponCode: discountResult.couponCode
+              }
+            };
+          }
+          break;
+        }
+        
+        case "check_inventory": {
+          const inventoryResult = await this.executeInventoryCheck(args);
+          products = inventoryResult.products;
+          if (!message) message = inventoryResult.message;
+          break;
         }
       }
     }
+    
+    return { message, products: products.length > 0 ? products : undefined, action };
+  }
 
-    const productList = products
-      .map(
-        (p) =>
-          `• **${p.name}** - $${p.price} - ${p.description.substring(0, 80)}...`
-      )
-      .join("\n");
-
-    let message = `I found ${products.length} great option${products.length > 1 ? "s" : ""} for you:\n\n${productList}\n\nWould you like to see more details or add any to your cart?`;
-
-    if (hasSpecialOccasion) {
-      message += "\n\n🎉 Special occasion! I can help you with a discount - just ask!";
+  private async executeSearch(args: any): Promise<Product[]> {
+    const { query, category, max_price, sort_by } = args;
+    
+    let results = [...this.inventory];
+    
+    // Filter by category
+    if (category) {
+      results = results.filter(p => p.category === category);
     }
     
-    // Add note about UI update if category was detected
-    if (detectedCategory) {
-      message += `\n\n🔄 I've also updated the shop to show **${detectedCategory}** - check it out!`;
+    // Filter by price
+    if (max_price) {
+      results = results.filter(p => p.price <= max_price);
     }
-
-    // Extract relevant product keywords from the found products
-    // This helps filter the shop page more accurately
-    const productKeywords = this.extractProductKeywords(products, query);
     
-    // Build action to update shop UI
-    let action: ClerkAction | undefined;
-    if (detectedCategory) {
-      action = {
-        type: "filter",
-        payload: {
-          filterType: "filter_by_category",
-          value: detectedCategory,
-          searchQuery: query,
-          productKeywords: productKeywords,
-        },
-      };
-    } else {
-      // Even without a specific category, trigger a search filter
-      action = {
-        type: "filter",
-        payload: {
-          filterType: "search",
-          value: query,
-          productKeywords: productKeywords,
-        },
-      };
-    }
-
-    return {
-      message,
-      products,
-      action,
-    };
-  }
-
-  /**
-   * Handle inventory check
-   */
-  private async handleInventoryCheck(
-    productName: string,
-    size?: string,
-    color?: string
-  ): Promise<ClerkResponse> {
-    // Try to find the product first
-    const products = await searchProductsSemantic(productName, 1);
-    if (products.length === 0) {
-      return {
-        message: `I couldn't find a product matching "${productName}". Could you be more specific?`,
-      };
-    }
-
-    const product = products[0];
-    const inventory = await checkInventory(product.id, size, color);
-
-    if (inventory.available) {
-      return {
-        message: `Yes! ${product.name} is available. We have ${inventory.stock} in stock. Available sizes: ${product.sizes.join(", ")}. Would you like to add it to your cart?`,
-        products: [product],
-      };
-    } else {
-      return {
-        message: `I'm sorry, but ${product.name} is currently out of stock. Would you like me to show you similar products?`,
-        products: [product],
-      };
-    }
-  }
-
-  /**
-   * Handle product recommendations
-   */
-  private async handleRecommendations(
-    sessionId: string
-  ): Promise<ClerkResponse> {
-    let products = await getRecommendedProducts(sessionId, 4);
-
-    if (products.length === 0) {
-      // Fallback to all products
-      products = await getProducts({}, { field: "created_at", order: "desc" });
-      if (products.length === 0) {
-        // Ultimate fallback: use local products
-        const { products: localProducts } = await import("@/lib/products");
-        products = localProducts.slice(0, 4).map((p: any) => ({
-          id: String(p.id),
-          name: p.name,
-          price: p.price,
-          image_url: p.image,
-          category: p.category,
-          description: p.description,
-          sizes: p.sizes || [],
-          colors: [],
-          stock: 10,
-          tags: [],
-        }));
-      } else {
-        products = products.slice(0, 4);
-      }
-    }
-
-    return {
-      message: `Here are some great options I think you'll love:\n\n${products.map(p => `• **${p.name}** - $${p.price}`).join("\n")}\n\nWould you like to see more details?`,
-      products,
-    };
-  }
-
-  /**
-   * Handle filter/sort actions (Vibe Filter)
-   * This is the "Vibe Filter" - the Clerk can control the website UI in real-time
-   */
-  private async handleFilter(
-    filterType: string,
-    value: any
-  ): Promise<ClerkResponse> {
-    let message = "";
-    let actionPayload: any = { filterType, value };
-    let products: Product[] = [];
-
-    if (filterType === "sort_by_price") {
-      // Get products sorted by price to show in chat
-      products = await getProducts({}, { field: "price", order: value as "asc" | "desc" });
-      products = products.slice(0, 4);
+    // Search by query (name, description, tags)
+    if (query) {
+      const queryLower = query.toLowerCase();
+      const queryWords = queryLower.split(/\s+/).filter((w: string) => w.length > 2);
       
-      if (value === "asc") {
-        message = `🔄 I'm updating the shop to show the most affordable options first!\n\nHere are some budget-friendly picks:`;
-        actionPayload = { filterType: "sort_by_price", value: "asc" };
-      } else {
-        message = `🔄 I'm sorting products by price, highest first!\n\nHere are our premium picks:`;
-        actionPayload = { filterType: "sort_by_price", value: "desc" };
-      }
-    } else if (filterType === "filter_by_category") {
-      products = await getProducts({ category: value });
-      products = products.slice(0, 4);
-      message = `🔄 I'm filtering the shop to show ${value}!\n\nHere are some great ${value.toLowerCase()}:`;
-      actionPayload = { filterType: "filter_by_category", value };
-    } else if (filterType === "filter_by_price_range") {
-      products = await getProducts({ minPrice: value.min, maxPrice: value.max });
-      products = products.slice(0, 4);
-      message = `🔄 I'm filtering products in your price range!`;
-      actionPayload = { filterType: "filter_by_price_range", value };
-    } else {
-      message = "🔄 I'm updating the shop view for you!";
+      results = results.filter(p => {
+        const searchText = `${p.name} ${p.description} ${p.category} ${(p.tags || []).join(" ")}`.toLowerCase();
+        return queryWords.some((word: string) => searchText.includes(word)) || searchText.includes(queryLower);
+      });
     }
-
-    return {
-      message: message + "\n\nCheck the Shop page - it's been updated! ➡️",
-      products: products.length > 0 ? products : undefined,
-      action: {
-        type: "filter",
-        payload: actionPayload,
-      },
-    };
+    
+    // Sort
+    if (sort_by === "price_low") {
+      results.sort((a, b) => a.price - b.price);
+    } else if (sort_by === "price_high") {
+      results.sort((a, b) => b.price - a.price);
+    }
+    
+    return results.slice(0, 6);
   }
 
-  /**
-   * Handle size response when user provides a size after we asked
-   */
-  private async handleSizeResponse(
-    sizeInput: string,
-    sessionId: string
-  ): Promise<ClerkResponse> {
-    // Get the product we're waiting to add
-    const product = this.pendingAddToCart;
+  private async executeAddToCart(args: any, sessionId: string): Promise<{success: boolean; message: string; product?: Product}> {
+    const { product_id, product_name, size, quantity = 1 } = args;
+    
+    // Find the product
+    const product = this.inventory.find(p => p.id === product_id) || 
+                    this.inventory.find(p => p.name.toLowerCase() === product_name.toLowerCase()) ||
+                    this.inventory.find(p => p.name.toLowerCase().includes(product_name.toLowerCase()));
     
     if (!product) {
-      // No pending product - try to use last shown products
-      if (this.lastShownProducts.length > 0) {
-        this.pendingAddToCart = this.lastShownProducts[0];
-        return this.handleSizeResponse(sizeInput, sessionId);
-      }
-      return {
-        message: "I'm not sure which product you want. Could you tell me which item you'd like to add to cart?",
+      return { success: false, message: `I couldn't find "${product_name}" in our inventory. Let me show you what we have!` };
+    }
+    
+    // Validate size
+    const validSize = product.sizes.find(s => s.toLowerCase() === size.toLowerCase()) || 
+                      product.sizes.find(s => s === size);
+    
+    if (!validSize) {
+      return { 
+        success: false, 
+        message: `Hmm, size "${size}" isn't available for ${product.name}. We have: ${product.sizes.join(", ")}. Which one would you like?` 
       };
     }
-
-    // Extract the size from the input
-    let size = sizeInput.toUpperCase().replace(/SIZE\s*:?\s*/i, "").trim();
     
-    // Map common size words to standard sizes
-    const sizeMap: Record<string, string> = {
-      "small": "S",
-      "medium": "M",
-      "large": "L",
-      "extra large": "XL",
-      "extra small": "XS",
-    };
-    
-    if (sizeMap[size.toLowerCase()]) {
-      size = sizeMap[size.toLowerCase()];
-    }
-
-    // Validate the size is available
-    if (product.sizes && product.sizes.length > 0 && !product.sizes.includes(size)) {
-      return {
-        message: `Sorry, size "${size}" is not available for **${product.name}**.\n\nAvailable sizes: ${product.sizes.join(", ")}\n\nPlease choose a different size.`,
-        products: [product],
-      };
-    }
-
-    // Clear pending product
-    this.pendingAddToCart = null;
-
     // Add to cart
     try {
-      await addToCart(product.id, size, 1);
+      await addToCart(product.id, validSize, quantity);
     } catch (error) {
-      console.warn("[Clerk Agent] Supabase cart add failed, using local cart:", error);
+      console.warn("[Clerk] Cart add failed:", error);
     }
-
-    return {
-      message: `Added **${product.name}** (size ${size}) to your cart! 🛒\n\nWould you like to continue shopping or checkout?`,
-      products: [product],
-      action: {
-        type: "add_to_cart",
-        payload: { productId: product.id, size, quantity: 1 },
-      },
+    
+    return { 
+      success: true, 
+      message: `Perfect! I've added **${product.name}** (size ${validSize}) to your cart! 🛒 Ready to checkout, or would you like to keep browsing?`,
+      product 
     };
   }
 
-  /**
-   * Handle add to cart from user message
-   * Extracts product name from message and finds it in recently shown products
-   */
-  private async handleAddToCartFromMessage(
-    userMessage: string,
-    sessionId: string
-  ): Promise<ClerkResponse> {
-    const lowerMessage = userMessage.toLowerCase();
+  private async executeFilter(args: any): Promise<{products: Product[]; action: ClerkAction}> {
+    const { filter_type, category } = args;
     
-    // If there's a pending add-to-cart, complete it
-    if (this.pendingAddToCart) {
-      // Check if user provided a size
-      const sizeMatch = lowerMessage.match(/size\s*:?\s*(\w+)/i) ||
-                        lowerMessage.match(/\b(xs|s|m|l|xl|xxl)\b/i) ||
-                        lowerMessage.match(/\b(3[6-9]|4[0-9])\b/);
-      
-      if (sizeMatch) {
-        return this.handleSizeResponse(sizeMatch[1] || sizeMatch[0], sessionId);
-      }
+    let products = [...this.inventory];
+    let actionPayload: any = {};
+    
+    if (filter_type === "sort_price_low") {
+      products.sort((a, b) => a.price - b.price);
+      actionPayload = { filterType: "sort_by_price", value: "asc" };
+    } else if (filter_type === "sort_price_high") {
+      products.sort((a, b) => b.price - a.price);
+      actionPayload = { filterType: "sort_by_price", value: "desc" };
+    } else if (filter_type === "filter_category" && category) {
+      products = products.filter(p => p.category === category);
+      actionPayload = { filterType: "filter_by_category", value: category };
     }
     
-    // Get recently shown products
-    const recentProducts = this.lastShownProducts.length > 0 
-      ? this.lastShownProducts 
-      : this.getRecentProductsFromHistory();
+    return {
+      products: products.slice(0, 5),
+      action: { type: "filter", payload: actionPayload }
+    };
+  }
 
-    // Product name patterns for matching
-    const productKeywords = [
-      { pattern: /classic\s*sneaker/i, name: "Classic Sneakers" },
-      { pattern: /chelsea\s*boot/i, name: "Chelsea Boots" },
-      { pattern: /running\s*sneaker/i, name: "Running Sneakers" },
-      { pattern: /linen\s*blazer/i, name: "Linen Blazer" },
-      { pattern: /canvas\s*tote/i, name: "Canvas Tote" },
-      { pattern: /wool\s*overcoat/i, name: "Wool Overcoat" },
-      { pattern: /relaxed\s*trouser/i, name: "Relaxed Trousers" },
-      { pattern: /leather\s*belt/i, name: "Leather Belt" },
-      { pattern: /knit\s*sweater/i, name: "Knit Sweater" },
-      { pattern: /denim\s*jacket/i, name: "Denim Jacket" },
-      { pattern: /silk\s*scarf/i, name: "Silk Scarf" },
-      { pattern: /crossbody\s*bag/i, name: "Crossbody Bag" },
-    ];
+  private async executeDiscount(args: any, sessionId: string): Promise<{message: string; couponCode?: string}> {
+    const { reason, discount_percent } = args;
     
-    let matchedProduct: Product | null = null;
+    // Validate discount
+    const validDiscounts: Record<string, number> = {
+      birthday: 15,
+      wedding: 20,
+      student: 10,
+      first_purchase: 10,
+      bulk_order: 12,
+      valentines: 10,
+      loyal_customer: 10,
+    };
     
-    // Try to match specific product names first
-    for (const { pattern, name } of productKeywords) {
-      if (pattern.test(lowerMessage)) {
-        // Check in recent products
-        matchedProduct = recentProducts.find(p => 
-          p.name.toLowerCase() === name.toLowerCase()
-        ) || null;
-        
-        // If not found, search
-        if (!matchedProduct) {
-          const searchResults = await searchProductsSemantic(name, 1);
-          if (searchResults.length > 0) {
-            matchedProduct = searchResults[0];
-          }
-        }
-        break;
-      }
-    }
+    const discount = validDiscounts[reason] || Math.min(discount_percent, 15);
     
-    // Try matching by partial product name in recent products
-    if (!matchedProduct && recentProducts.length > 0) {
-      for (const product of recentProducts) {
-        const productNameLower = product.name.toLowerCase();
-        
-        // Full name match
-        if (lowerMessage.includes(productNameLower)) {
-          matchedProduct = product;
-          break;
-        }
-        
-        // Word-by-word match (e.g., "blazer" matches "Linen Blazer")
-        const productWords = productNameLower.split(/\s+/);
-        for (const word of productWords) {
-          if (word.length > 3 && lowerMessage.includes(word)) {
-            matchedProduct = product;
-            break;
-          }
-        }
-        if (matchedProduct) break;
-      }
-    }
-
-    // For generic "add it", "buy it" etc., use first recent product
-    if (!matchedProduct && recentProducts.length > 0) {
-      const genericAddPhrases = ["add it", "buy it", "get it", "take it", "add to cart", "yes", "ok", "sure"];
-      if (genericAddPhrases.some(phrase => lowerMessage.includes(phrase))) {
-        matchedProduct = recentProducts[0];
-      }
-    }
+    // Generate coupon code
+    const prefixes: Record<string, string> = {
+      birthday: "BDAY",
+      wedding: "WEDDING",
+      student: "STUDENT",
+      first_purchase: "WELCOME",
+      bulk_order: "BULK",
+      valentines: "LOVE",
+      loyal_customer: "LOYAL",
+    };
     
-    // Last resort: search for it
-    if (!matchedProduct) {
-      const allProducts = await getProducts({}, { field: "created_at", order: "desc" });
-      
-      // Try to match by any word in the message
-      for (const product of allProducts) {
-        const productWords = product.name.toLowerCase().split(/\s+/);
-        for (const word of productWords) {
-          if (word.length > 3 && lowerMessage.includes(word)) {
-            matchedProduct = product;
-            break;
-          }
-        }
-        if (matchedProduct) break;
-      }
-      
-      if (!matchedProduct) {
-        return {
-          message: "I'd be happy to add something to your cart! Which product would you like? Here are some options:",
-          products: allProducts.slice(0, 4),
-        };
-      }
-    }
-
-    // Check if user specified a size
-    const sizeMatch = lowerMessage.match(/size\s*:?\s*(\w+)/i) ||
-                      lowerMessage.match(/\b(xs|s|m|l|xl|xxl)\b/i) ||
-                      lowerMessage.match(/\b(3[6-9]|4[0-9])\b/);
+    const prefix = prefixes[reason] || "SPECIAL";
+    const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const couponCode = `${prefix}-${discount}${suffix}`;
     
-    // If product has multiple sizes and user didn't specify, ask for size
-    if (!sizeMatch && matchedProduct.sizes && matchedProduct.sizes.length > 1) {
-      // Store the product so we remember it when user responds with size
-      this.pendingAddToCart = matchedProduct;
-      
-      return {
-        message: `Great choice! **${matchedProduct.name}** is available in these sizes:\n\n${matchedProduct.sizes.join(", ")}\n\nWhich size would you like?`,
-        products: [matchedProduct],
-      };
-    }
-
-    // Determine size
-    let size = "";
-    if (sizeMatch) {
-      size = (sizeMatch[1] || sizeMatch[0]).toUpperCase();
-    } else if (matchedProduct.sizes && matchedProduct.sizes.length > 0) {
-      size = matchedProduct.sizes[0];
-    }
-
-    // Clear any pending state
-    this.pendingAddToCart = null;
-
-    // Add to cart
+    // Save coupon
     try {
-      await addToCart(matchedProduct.id, size, 1);
-    } catch (error) {
-      console.warn("[Clerk Agent] Supabase cart add failed, using local cart:", error);
-    }
-
-    return {
-      message: `Added **${matchedProduct.name}** (size ${size}) to your cart! 🛒\n\nWould you like to continue shopping or checkout?`,
-      products: [matchedProduct],
-      action: {
-        type: "add_to_cart",
-        payload: { productId: matchedProduct.id, size, quantity: 1 },
-      },
-    };
-  }
-  
-  /**
-   * Get recent products from conversation history
-   */
-  private getRecentProductsFromHistory(): Product[] {
-    const products: Product[] = [];
-    for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
-      const msg = this.conversationHistory[i];
-      if (msg.products && msg.products.length > 0) {
-        products.push(...msg.products);
-        if (products.length >= 4) break;
+      if (supabase) {
+        const validUntil = new Date();
+        validUntil.setDate(validUntil.getDate() + 30);
+        
+        await supabase.from("coupons").insert({
+          code: couponCode,
+          discount_type: "percentage",
+          discount_value: discount,
+          valid_from: new Date().toISOString(),
+          valid_until: validUntil.toISOString(),
+          usage_limit: 1,
+          used_count: 0,
+          created_by_agent: true,
+          reason: reason,
+        });
       }
+    } catch (error) {
+      console.warn("[Clerk] Failed to save coupon to DB:", error);
     }
-    return products;
-  }
-
-  /**
-   * Handle add to cart (direct call with product ID)
-   */
-  private async handleAddToCart(
-    productId: string,
-    size: string,
-    quantity: number
-  ): Promise<ClerkResponse> {
+    
+    // Also save locally
     try {
-      await addToCart(productId, size, quantity);
-      const product = await getProductById(productId);
-
-      return {
-        message: `Perfect! I've added ${quantity}x ${product?.name || "item"}${size ? ` (size: ${size})` : ""} to your cart. Would you like to see your cart or continue shopping?`,
-        products: product ? [product] : undefined,
-        action: {
-          type: "add_to_cart",
-          payload: { productId, size, quantity },
-        },
-      };
-    } catch (error) {
-      return {
-        message: "I'm sorry, but I couldn't add that item to your cart. Please try again.",
-      };
+      const storedCoupons = JSON.parse(localStorage.getItem("clerk_coupons") || "{}");
+      storedCoupons[couponCode] = { discount_type: "percentage", discount_value: discount };
+      localStorage.setItem("clerk_coupons", JSON.stringify(storedCoupons));
+    } catch (e) {
+      // Ignore localStorage errors
     }
-  }
-
-  /**
-   * Handle haggle/discount requests
-   */
-  private async handleHaggle(
-    message: string,
-    sessionId: string
-  ): Promise<ClerkResponse> {
-    const { processHaggle } = await import("./haggle");
-    const result = await processHaggle(message, sessionId);
-
+    
+    const messages: Record<string, string> = {
+      birthday: `Happy Birthday! 🎂 Here's a special ${discount}% discount just for you!`,
+      wedding: `Congratulations on your wedding! 💍 Here's ${discount}% off to celebrate!`,
+      student: `Student discount activated! 📚 Here's ${discount}% off for you.`,
+      first_purchase: `Welcome to TrendZone! 🎉 Here's ${discount}% off your first order!`,
+      bulk_order: `Thanks for the bulk order! Here's ${discount}% off for buying multiple items.`,
+      valentines: `Spreading the love! 💝 Here's ${discount}% off for Valentine's!`,
+      loyal_customer: `Thanks for being a loyal customer! 🌟 Here's ${discount}% off!`,
+    };
+    
     return {
-      message: result.message,
-      action: result.success
-        ? {
-          type: "filter",
-          payload: {
-            action: "apply_coupon",
-            couponCode: result.couponCode,
-          },
-        }
-        : undefined,
+      message: `${messages[reason] || `Here's a special ${discount}% discount for you!`}\n\nYour code: **${couponCode}**\n\nUse it at checkout!`,
+      couponCode,
     };
   }
 
-  /**
-   * Handle general conversation - ALWAYS grounded in real products
-   */
-  private async handleGeneralChat(message: string): Promise<ClerkResponse> {
-    const lowerMessage = message.toLowerCase().trim();
+  private async executeInventoryCheck(args: any): Promise<{products: Product[]; message: string}> {
+    const { product_name, size } = args;
     
-    // Simple greetings
-    if (lowerMessage === "hi" || lowerMessage === "hello" || lowerMessage === "hey" || lowerMessage === "hi!" || lowerMessage === "hello!") {
+    // Find matching products
+    const matches = this.inventory.filter(p => 
+      p.name.toLowerCase().includes(product_name.toLowerCase())
+    );
+    
+    if (matches.length === 0) {
       return {
-        message: "Hello! Welcome to TrendZone! 👋\n\nI'm here to help you find the perfect items. What are you looking for today?\n\n• Browse our collection (\"show me shoes\")\n• Get recommendations (\"what do you suggest?\")\n• Ask about discounts (\"it's my birthday!\")",
+        products: [],
+        message: `I don't see "${product_name}" in our current inventory. Would you like me to show you similar items?`
       };
     }
     
-    // Thanks/bye
-    if (lowerMessage.includes("thank") || lowerMessage === "bye" || lowerMessage === "goodbye") {
+    const product = matches[0];
+    const availability = product.stock > 0 ? "in stock" : "currently out of stock";
+    let message = `**${product.name}** is ${availability}!`;
+    
+    if (size && product.sizes.map(s => s.toLowerCase()).includes(size.toLowerCase())) {
+      message += ` Size ${size} is available.`;
+    } else if (size) {
+      message += ` We don't have size ${size}, but we do have: ${product.sizes.join(", ")}`;
+    } else {
+      message += ` Available sizes: ${product.sizes.join(", ")}`;
+    }
+    
+    return { products: matches.slice(0, 3), message };
+  }
+
+  private fallbackResponse(userMessage: string): ClerkResponse {
+    const lower = userMessage.toLowerCase();
+    
+    // Simple keyword matching as fallback when API is unavailable
+    if (lower.includes("shoe") || lower.includes("sneaker") || lower.includes("boot") || lower.includes("loafer")) {
+      const shoes = this.inventory.filter(p => p.category === "Shoes").slice(0, 4);
       return {
-        message: "You're welcome! Happy shopping at TrendZone! 🛍️",
+        message: "Let me show you our shoe collection! We've got some great options - from casual sneakers to classic boots. Take a look!",
+        products: shoes.length > 0 ? shoes : undefined,
+        action: { type: "filter", payload: { filterType: "filter_by_category", value: "Shoes" } }
       };
     }
     
-    // Cart/checkout queries
-    if (lowerMessage.includes("cart") || lowerMessage.includes("checkout")) {
+    if (lower.includes("clothes") || lower.includes("clothing") || lower.includes("blazer") || lower.includes("jacket") || lower.includes("sweater")) {
+      const clothes = this.inventory.filter(p => p.category === "Clothes").slice(0, 4);
       return {
-        message: "You can view your cart by clicking the cart icon in the top right. Ready to checkout? Just head to your cart! 🛒",
+        message: "Here's our clothing collection! We've got everything from cozy sweaters to sharp blazers.",
+        products: clothes.length > 0 ? clothes : undefined,
+        action: { type: "filter", payload: { filterType: "filter_by_category", value: "Clothes" } }
       };
     }
     
-    // If user says yes/ok/sure and we have recent products - might be confirming an add
-    if ((lowerMessage === "yes" || lowerMessage === "ok" || lowerMessage === "sure" || lowerMessage === "yeah") && this.lastShownProducts.length > 0) {
-      // Treat as wanting to add the first product
-      const sessionId = typeof localStorage !== 'undefined' 
-        ? localStorage.getItem("cart_session_id") || "default" 
-        : "default";
-      return this.handleAddToCartFromMessage("add it to cart", sessionId);
+    if (lower.includes("bag") || lower.includes("tote") || lower.includes("backpack")) {
+      const bags = this.inventory.filter(p => p.category === "Bags").slice(0, 4);
+      return {
+        message: "Check out our bag collection! Perfect for work, travel, or everyday use.",
+        products: bags.length > 0 ? bags : undefined,
+        action: { type: "filter", payload: { filterType: "filter_by_category", value: "Bags" } }
+      };
     }
     
-    // For other messages, provide helpful response
+    if (lower.includes("cheap") || lower.includes("affordable") || lower.includes("budget") || lower.includes("low price")) {
+      const sorted = [...this.inventory].sort((a, b) => a.price - b.price).slice(0, 5);
+      return {
+        message: "Looking for something budget-friendly? Here are our most affordable options - great quality without breaking the bank!",
+        products: sorted,
+        action: { type: "filter", payload: { filterType: "sort_by_price", value: "asc" } }
+      };
+    }
+    
+    if (lower.includes("expensive") || lower.includes("premium") || lower.includes("luxury") || lower.includes("high end")) {
+      const sorted = [...this.inventory].sort((a, b) => b.price - a.price).slice(0, 5);
+      return {
+        message: "Looking for something special? Here are our premium picks - top quality pieces that make a statement!",
+        products: sorted,
+        action: { type: "filter", payload: { filterType: "sort_by_price", value: "desc" } }
+      };
+    }
+    
+    if (lower.includes("birthday")) {
+      return this.executeDiscount({ reason: "birthday", discount_percent: 15 }, "fallback").then(result => ({
+        message: result.message,
+        action: result.couponCode ? { type: "filter", payload: { action: "apply_coupon", couponCode: result.couponCode } } : undefined
+      })) as any; // Will be resolved
+    }
+    
+    if (lower.includes("wedding")) {
+      return {
+        message: "Congratulations on the wedding! 💍 I'd love to help you find the perfect outfit AND get you a special discount! Just let me know what you're looking for.",
+      };
+    }
+    
+    if (lower.includes("discount") || lower.includes("deal") || lower.includes("coupon")) {
+      return {
+        message: "I'd love to help with a discount! We offer special codes for:\n\n• 🎂 Birthdays - 15% off\n• 💍 Weddings - 20% off\n• 📚 Students - 10% off\n• 🆕 First order - 10% off\n\nJust let me know your occasion!",
+      };
+    }
+    
+    if (lower.includes("cart") || lower.includes("checkout")) {
+      return {
+        message: "You can check your cart by clicking the cart icon in the top right! Ready to checkout? Everything's waiting for you there. 🛒",
+      };
+    }
+    
+    if (lower.includes("hi") || lower.includes("hello") || lower.includes("hey")) {
+      return {
+        message: "Hey there! Welcome to TrendZone! 👋 I'm The Clerk, your personal shopping buddy. Looking for anything specific today? Shoes, clothes, bags - or maybe you want me to surprise you with some recommendations?",
+        products: this.inventory.slice(0, 4),
+      };
+    }
+    
+    if (lower.includes("thank") || lower.includes("bye") || lower.includes("goodbye")) {
+      return {
+        message: "You're welcome! It was great helping you today. Come back anytime - I'll be here! Happy shopping! 🛍️",
+      };
+    }
+    
+    // Default: show popular items
     return {
-      message: "I can help you with:\n\n• Finding products - \"show me shoes\" or \"I need a jacket\"\n• Adding to cart - \"add the blazer to my cart\"\n• Getting discounts - \"it's my birthday!\"\n• Sorting products - \"show me cheaper options\"\n\nWhat would you like to do?",
+      message: "Hey! I'm here to help you find the perfect stuff. Here are some of our popular items - or just tell me what you're looking for! I can help with shoes, clothes, bags, accessories... and I might even have some discounts for you! 😉",
+      products: this.inventory.slice(0, 4),
     };
   }
 
-  /**
-   * Extract relevant keywords from products for better shop filtering
-   * This extracts product type words (sneakers, boots, blazer) from product names
-   */
-  private extractProductKeywords(products: Product[], originalQuery: string): string {
-    const lowerQuery = originalQuery.toLowerCase();
-    
-    // Common product type keywords to look for
-    const productTypeKeywords = [
-      "sneakers", "sneaker", "boots", "boot", "shoes", "shoe",
-      "blazer", "jacket", "sweater", "overcoat", "coat", "trousers", "pants",
-      "tote", "bag", "crossbody",
-      "belt", "scarf"
-    ];
-    
-    // Check if the original query contains a specific product type
-    for (const keyword of productTypeKeywords) {
-      if (lowerQuery.includes(keyword)) {
-        return keyword;
-      }
-    }
-    
-    // If no specific keyword in query, extract from first product name
-    if (products.length > 0) {
-      const firstProductName = products[0].name.toLowerCase();
-      for (const keyword of productTypeKeywords) {
-        if (firstProductName.includes(keyword)) {
-          return keyword;
-        }
-      }
-      
-      // If still no match, use key words from product names
-      // Extract the main product type word (usually the last word)
-      const words = products[0].name.split(/\s+/);
-      if (words.length > 0) {
-        // Try to get a meaningful product word (not adjectives like "Classic", "Wool")
-        const lastWord = words[words.length - 1].toLowerCase();
-        if (lastWord.length > 3) {
-          return lastWord;
-        }
-      }
-    }
-    
-    // Fallback to original query
-    return originalQuery;
-  }
-
-  /**
-   * Clear conversation history
-   */
   clearHistory() {
-    this.conversationHistory = [
-      {
-        role: "system",
-        content: SYSTEM_PROMPT,
-      },
-    ];
-    this.pendingAddToCart = null;
     this.lastShownProducts = [];
-    this.context = {
-      lastSearchQuery: null,
-      lastCategory: null,
-      lastMentionedProducts: [],
-      userPreferences: {},
-      topicHistory: [],
-    };
+    this.isInitialized = false;
+    if (this.genAI) {
+      this.ensureInitialized(); // Reinitialize with fresh chat
+    }
   }
-  
-  /**
-   * Get current conversation context (for debugging/status)
-   */
-  getContext(): ConversationContext {
-    return { ...this.context };
+
+  getContext() {
+    return {
+      inventoryCount: this.inventory.length,
+      lastShownProductCount: this.lastShownProducts.length,
+      hasModel: !!this.model,
+      isInitialized: this.isInitialized,
+    };
   }
 }
